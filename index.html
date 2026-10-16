@@ -916,8 +916,21 @@ function moisNouveau(c, y){
 function nouveauxDuMois(com, mk){
   return DB.clients.filter(c => c.commercial === com && moisNouveau(c, String(mk).slice(0,4)) === mk);
 }
+/* Gros nouveaux clients (1re commande ≥ seuil, 800 € par défaut) retenus pour la prime.
+   Il faut au moins 3 nouveaux comptes dans le mois : les 2 premiers servent de seuil
+   et ne rapportent rien. On prend d'abord les clients sous le seuil pour ces 2 places,
+   afin de garder les gros clients pour la prime ; s'il en manque, les plus petits des
+   gros clients complètent le seuil. Moins de 3 nouveaux comptes → 0. */
+function nvxPrimes(com, mk, seuil){
+  const l = nouveauxDuMois(com, mk).map(c => ({c, ca: caClientMois(c, mk)}));
+  const gros = l.filter(x => x.ca >= (+seuil||0)).sort((a,b) => a.ca - b.ca);
+  const petits = l.length - gros.length;
+  if(l.length < 3) return [];
+  const pris = Math.max(0, 2 - petits); /* gros clients absorbés par le seuil */
+  return gros.slice(pris).map(x => x.c);
+}
 function nvxAuDessus(com, mk, seuil){
-  return nouveauxDuMois(com, mk).filter(c => caClientMois(c, mk) >= (+seuil||0)).length;
+  return nvxPrimes(com, mk, seuil).length;
 }
 
 /* ==========================================================================
@@ -1849,6 +1862,7 @@ VIEWS['performance:primes'] = () => {
           ${ms.map(m=>`<option value="${m}" ${m===PRIME_MOIS?'selected':''}>${monthLabel(m)}</option>`).join('')}
         </select>
         <button class="btn sm" onclick="pdfPrimes()">Exporter en PDF</button>
+        <button class="btn ghost sm" onclick="pdfPrimesAnnee()">PDF depuis janvier</button>
       </div>
     </div>
     <div class="grid g3">
@@ -1886,7 +1900,12 @@ VIEWS['performance:primes'] = () => {
       </table></div>
       ${(() => {
         const l = nouveauxDuMois(c.id, PRIME_MOIS);
-        return `<div class="hint" style="margin-top:10px"><strong>Nouveaux comptes retenus (${l.length})</strong> — plus de ${eur(seuilNouveau())} de chiffre dans le mois, sans aucun chiffre depuis janvier ${PRIME_MOIS.slice(0,4)}${l.length ? ' : ' + l.map(x => esc(x.nom) + ' (' + eur(caClientMois(x, PRIME_MOIS)) + ')').join(', ') : '.'}</div>`;
+        return `<div class="hint" style="margin-top:10px"><strong>Nouveaux comptes retenus (${l.length})</strong> — plus de ${eur(seuilNouveau())} de chiffre dans le mois, sans aucun chiffre depuis janvier ${PRIME_MOIS.slice(0,4)}${l.length ? ' : ' + l.map(x => esc(x.nom) + ' (' + eur(caClientMois(x, PRIME_MOIS)) + ')').join(', ') : '.'}</div>` + (() => {
+          const cr = DB.primes.criteres.find(k => k.type==='nvxseuil' && k.actif);
+          if(!cr) return '';
+          const pr = nvxPrimes(c.id, PRIME_MOIS, cr.param);
+          return `<div class="hint" style="margin-top:6px"><strong>Gros clients retenus en prime (${pr.length})</strong> — ${l.length < 3 ? 'moins de 3 nouveaux comptes ce mois : aucun.' : (pr.length ? pr.map(x => esc(x.nom) + ' (' + eur(caClientMois(x, PRIME_MOIS)) + ')').join(', ') : 'aucun au-delà des 2 clients de seuil.')}</div>`;
+        })();
       })()}
     </div>`).join('')}`;
 };
@@ -1971,7 +1990,7 @@ VIEWS['performance:reglages'] = () => {
     <div class="note" style="margin-top:10px">
       <strong>Atteinte de l'objectif CA</strong> mesure le rapport entre le CA réalisé et l'objectif du mois : une cible à 110 récompense un dépassement de 10 %.
       <strong>Nouveaux clients</strong> : un compte n'est retenu comme nouveau que s'il réalise plus de ${eur(seuilNouveau())} de chiffre dans le mois <em>et</em> n'a fait aucun chiffre depuis janvier de l'année (ou n'en a jamais fait). Le chiffre est lu sur les relevés comptables, à défaut sur les visites chiffrées.
-      <strong>Nouveaux clients — 1re commande ≥ seuil</strong> applique en plus le seuil du paramètre au chiffre du mois d'ouverture.
+      <strong>Nouveaux clients — 1re commande ≥ seuil</strong> applique en plus le seuil du paramètre au chiffre du mois d'ouverture, et ne compte que si le commercial a ouvert au moins 3 nouveaux comptes dans le mois : les 2 premiers servent de seuil (les clients sous le seuil du paramètre sont pris en priorité), seuls les gros clients au-delà comptent.
     </div>
     <p class="hint" style="margin-top:10px">La colonne <strong>Calcul</strong> permet à un critère de déroger au réglage général : un bonus de dépassement se prête mal au prorata, il se gagne ou ne se gagne pas.</p>
   </div>`;
@@ -2811,6 +2830,11 @@ VIEWS['data:rapports'] = () => `
         <button class="btn sm" onclick="pdfPrimes()">Générer</button>
       </div>
       <div class="card" style="background:var(--bg2)">
+        <div class="eyebrow">Cumul annuel</div><h4 style="margin-bottom:8px">Primes depuis janvier</h4>
+        <p class="hint" style="margin-bottom:12px">Récapitulatif mois par mois et détail critère par critère, pour chaque commercial (mois clôturés).</p>
+        <button class="btn sm" onclick="pdfPrimesAnnee()">Générer</button>
+      </div>
+      <div class="card" style="background:var(--bg2)">
         <div class="eyebrow">Suivi</div><h4 style="margin-bottom:8px">Clients dormants</h4>
         <p class="hint" style="margin-bottom:12px">Plus de 60 jours sans visite, par commercial.</p>
         <button class="btn sm" onclick="pdfDormants()">Générer</button>
@@ -2925,6 +2949,74 @@ function pdfPrimes(){
     if(y > 245){ doc.addPage(); y = 20; }
   });
   doc.save('givedis-primes-'+mk+'.pdf');
+  toast('Rapport généré', 'ok');
+}
+
+/* Primes depuis janvier : mois clôturés de l'exercice consulté (tous les mois pour un exercice passé). */
+function moisClotures(y){
+  y = String(y);
+  const cur = curMonth();
+  return monthsOfYear(y).filter(m => m < cur);
+}
+function pdfPrimesAnnee(){
+  const y = String(YEAR);
+  const ms = moisClotures(y);
+  if(!ms.length){ toast('Aucun mois clôturé sur ' + y, 'bad'); return; }
+  const {jsPDF} = window.jspdf; const doc = new jsPDF();
+  const per = monthLabel(ms[0]) + ' a ' + monthLabel(ms[ms.length-1]);
+  const E = v => Math.round(v).toLocaleString('fr-FR').replace(/[\u202f\u00a0]/g,' ') + ' EUR';
+  const cr800 = DB.primes.criteres.find(k => k.type==='nvxseuil' && k.actif!==false);
+  const coms = ACTIFS();
+  const data = coms.map(c => ({c, mois: ms.map(m => ({m, p: calcPrime(c.id, m)}))}));
+  const totCom = d => d.mois.reduce((s,x)=>s+x.p.total,0);
+
+  /* Page de synthèse : équipe */
+  pdfHead(doc, 'Primes depuis janvier ' + y, clean(per) + ' — edite le ' + fdate(todayISO()));
+  doc.setFontSize(12); doc.setFont(undefined,'bold'); doc.setTextColor(20,25,45);
+  doc.text('Synthese equipe', 14, 42);
+  doc.autoTable({startY:46,
+    head:[['Mois', ...coms.map(c=>clean(c.nom)), 'Total']],
+    body: ms.map((m,i) => [clean(monthLabel(m)), ...data.map(d=>E(d.mois[i].p.total)),
+      E(data.reduce((s,d)=>s+d.mois[i].p.total,0))]),
+    foot:[['Total', ...data.map(d=>E(totCom(d))), E(data.reduce((s,d)=>s+totCom(d),0))]],
+    footStyles:{fillColor:[77,155,255],textColor:[4,16,31],fontStyle:'bold'}, ...TBL});
+
+  /* Une section par commercial */
+  data.forEach(d => {
+    doc.addPage();
+    pdfHead(doc, 'Primes ' + y + ' — ' + clean(d.c.nom), clean(per) + ' — total ' + E(totCom(d)));
+    doc.autoTable({startY:40,
+      head:[['Mois','CA','Palier CA','Criteres atteints','Prime']],
+      body: d.mois.map(({m,p}) => [clean(monthLabel(m)), E(p.st.ca),
+        p.gateActif ? p.gateVal.toFixed(1)+' % / '+p.gateSeuil+' %'+(p.gateOk?'':' (non atteint)') : '-',
+        p.lignes.filter(l=>l.montant_du>0).length + ' / ' + p.lignes.length, E(p.total)]),
+      foot:[['Total '+y,'','','', E(totCom(d))]],
+      footStyles:{fillColor:[77,155,255],textColor:[4,16,31],fontStyle:'bold'}, ...TBL});
+    let yy = doc.lastAutoTable.finalY + 10;
+    d.mois.forEach(({m,p}) => {
+      if(yy > 230){ doc.addPage(); yy = 20; }
+      doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.setTextColor(20,25,45);
+      doc.text(clean(monthLabel(m)) + ' — ' + E(p.total), 14, yy);
+      doc.setFontSize(8.5); doc.setFont(undefined,'normal'); doc.setTextColor(90,100,120);
+      let info = [];
+      if(p.gateActif) info.push('Palier d\'ouverture : ' + p.gateVal.toFixed(1) + ' % / ' + p.gateSeuil + ' % — ' + (p.gateOk?'atteint':'NON ATTEINT, aucune prime due'));
+      if(cr800){
+        const nv = nouveauxDuMois(d.c.id, m), gros = nvxPrimes(d.c.id, m, cr800.param);
+        info.push('Nouveaux comptes : ' + nv.length + ' — gros clients retenus en prime : ' +
+          (gros.length ? gros.map(x => clean(x.nom) + ' (' + E(caClientMois(x, m)) + ')').join(', ') : 'aucun'));
+      }
+      const lines = doc.splitTextToSize(info.join('\n'), 182);
+      doc.text(lines, 14, yy+5);
+      doc.autoTable({startY: yy + 7 + lines.length*3.6,
+        head:[['Critere','Realise','Cible','Atteinte','Prime']],
+        body: p.lignes.map(l=>[clean(l.label), clean(fmtCrit(l,l.valeur)), clean(fmtCrit(l,l.cible)),
+          l.taux.toFixed(0)+' %', E(l.montant_du)]),
+        foot:[['','','','Total', E(p.total)]],
+        footStyles:{fillColor:[220,232,250],textColor:[20,25,45],fontStyle:'bold'}, ...TBL});
+      yy = doc.lastAutoTable.finalY + 10;
+    });
+  });
+  doc.save('givedis-primes-' + y + '-cumul.pdf');
   toast('Rapport généré', 'ok');
 }
 
