@@ -1,26 +1,70 @@
 /* =========================================================================
-   GIVEDIS OS — Mode « consultation seule »
+   GIVEDIS OS — Mode « consultation seule » par lien + mot de passe
    -------------------------------------------------------------------------
-   Lien de consultation : …/givedis-os/?lecture=<ID du fichier Drive>&c=<ID client OAuth>
-   - La personne se connecte avec SON compte Google, en lecture seule
-     (scope drive.readonly) : Google interdit toute écriture sur le fichier.
-   - Les données sont relues sur le Drive toutes les minutes et à chaque retour
-     sur l'onglet : la consultation reste à jour.
-   - Côté propriétaire (sans ?lecture), ajoute une carte « Partager en
-     consultation seule » à l'écran Données › Drive, et relance la connexion
-     Google au besoin pour que la synchro automatique ne s'arrête pas.
+   Propriétaire : à chaque envoi sur le Drive, l'appli dépose aussi une COPIE
+   CHIFFRÉE (AES-256-GCM, clé dérivée du mot de passe par PBKDF2) dans le
+   fichier « givedis-os-lecture.json », lisible par toute personne ayant le lien.
+   Sans le mot de passe, ce fichier est illisible.
+   Le mot de passe n'est jamais envoyé nulle part : il reste dans ce navigateur.
+
+   Consultation : …/givedis-os/?lire=<ID du fichier>&k=<clé d'API Google>
+   La personne tape le mot de passe, consulte, et l'appli se met à jour
+   toute seule chaque minute. Aucun compte n'est nécessaire.
    À charger APRÈS le script principal : <script src="lecture.js"></script>
    ========================================================================= */
 (function(){
   'use strict';
 
   var params = new URLSearchParams(location.search);
-  var RO = params.has('lecture');
+  var RO = params.has('lire');
+  var FICHIER_LECTURE = 'givedis-os-lecture.json';
+  var CLE_MDP = 'gos_ro_mdp';
+  var ITERATIONS = 250000;
+
+  /* ---------------- Chiffrement (commun) ---------------- */
+  var enc = new TextEncoder(), dec = new TextDecoder();
+  function b64(buf){
+    var o = new Uint8Array(buf), s = '', P = 0x8000;
+    for(var i = 0; i < o.length; i += P) s += String.fromCharCode.apply(null, o.subarray(i, i + P));
+    return btoa(s);
+  }
+  function deb64(s){
+    var b = atob(s), o = new Uint8Array(b.length);
+    for(var i = 0; i < b.length; i++) o[i] = b.charCodeAt(i);
+    return o;
+  }
+  function cle(mdp, sel, iter){
+    return crypto.subtle.importKey('raw', enc.encode(mdp), 'PBKDF2', false, ['deriveKey'])
+      .then(function(base){
+        return crypto.subtle.deriveKey({name:'PBKDF2', salt:sel, iterations:iter, hash:'SHA-256'},
+          base, {name:'AES-GCM', length:256}, false, ['encrypt', 'decrypt']);
+      });
+  }
+  function chiffrer(texte, mdp){
+    var sel = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    return cle(mdp, sel, ITERATIONS)
+      .then(function(k){ return crypto.subtle.encrypt({name:'AES-GCM', iv:iv}, k, enc.encode(texte)); })
+      .then(function(c){
+        return JSON.stringify({v:1, kdf:'PBKDF2-SHA256', iter:ITERATIONS, sel:b64(sel), iv:b64(iv),
+                               data:b64(c), maj:new Date().toISOString()});
+      });
+  }
+  function dechiffrer(paquet, mdp){
+    return cle(mdp, deb64(paquet.sel), paquet.iter || ITERATIONS)
+      .then(function(k){ return crypto.subtle.decrypt({name:'AES-GCM', iv:deb64(paquet.iv)}, k, deb64(paquet.data)); })
+      .then(function(b){ return dec.decode(b); });
+  }
+  function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+  function lsSet(k, v){ try{ v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); }catch(e){} }
 
   /* ======================= CÔTÉ PROPRIÉTAIRE ======================= */
   if(!RO){
-    /* 1. Synchro toujours active : si la sauvegarde auto est activée mais que la
-          session Google a expiré, on la relance pendant le clic qui enregistre. */
+    function confLecture(){
+      DB.settings.lecture = DB.settings.lecture || {fileId:null, apiKey:'', maj:null};
+      return DB.settings.lecture;
+    }
+
+    /* Synchro toujours active : relance la session Google pendant le clic qui enregistre */
     var saveOrig = window.save;
     window.save = function(){
       var r = saveOrig.apply(this, arguments);
@@ -33,15 +77,124 @@
       return r;
     };
 
-    /* 2. Carte de partage dans Données › Drive */
+    /* Après chaque envoi sur le Drive, met à jour la copie chiffrée */
+    var envoyerOrig = window.gEnvoyer;
+    window.gEnvoyer = function(){
+      return envoyerOrig.apply(this, arguments).then(function(r){
+        return publier(false).catch(function(e){ console.warn('Copie de consultation :', e); }).then(function(){ return r; });
+      });
+    };
+
+    var enPublication = false;
+    function publier(manuel){
+      var mdp = lsGet(CLE_MDP);
+      if(!mdp){ if(manuel) toast('Définissez d\'abord un mot de passe', 'bad'); return Promise.resolve(); }
+      if(!gConnecte()) return Promise.reject(new Error('Non connecté à Google'));
+      if(enPublication) return Promise.resolve();
+      enPublication = true;
+      var conf = confLecture();
+      var copie = JSON.parse(JSON.stringify(DB));
+      if(copie.settings){ delete copie.settings.google; delete copie.settings.lecture; }
+      var entete = {Authorization:'Bearer ' + G.token};
+
+      return chiffrer(JSON.stringify(copie), mdp).then(function(contenu){
+        var form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify(conf.fileId ? {} : {name:FICHIER_LECTURE, mimeType:'application/json'})], {type:'application/json'}));
+        form.append('file', new Blob([contenu], {type:'application/json'}));
+        var url = 'https://www.googleapis.com/upload/drive/v3/files' +
+                  (conf.fileId ? '/' + conf.fileId : '') + '?uploadType=multipart&fields=id';
+        return fetch(url, {method: conf.fileId ? 'PATCH' : 'POST', headers:entete, body:form});
+      }).then(function(r){
+        if(r.status === 404 && conf.fileId){ conf.fileId = null; throw new Error('Fichier de consultation introuvable, il sera recréé'); }
+        if(!r.ok) throw new Error('Envoi de la copie impossible (' + r.status + ')');
+        return r.json();
+      }).then(function(f){
+        var nouveau = !conf.fileId;
+        conf.fileId = f.id;
+        conf.maj = new Date().toISOString();
+        if(!nouveau) return;
+        /* Lecture ouverte à toute personne ayant le lien (le contenu reste chiffré) */
+        return fetch('https://www.googleapis.com/drive/v3/files/' + f.id + '/permissions', {
+          method:'POST', headers:Object.assign({'Content-Type':'application/json'}, entete),
+          body: JSON.stringify({role:'reader', type:'anyone'})
+        }).then(function(r){
+          if(!r.ok) throw new Error('Partage du fichier impossible (' + r.status + ')');
+          save();                                   /* garde l'ID du fichier (navigateur + sauvegarde Drive) */
+        });
+      }).then(function(){
+        if(manuel) toast('Copie de consultation publiée', 'ok');
+        var c = document.getElementById('roCarte'); if(c) c.outerHTML = carteDePartage();
+      }).finally(function(){ enPublication = false; });
+    }
+
+    /* --- Carte dans Données › Drive --- */
     var vueDrive = VIEWS['data:drive'];
     if(typeof vueDrive === 'function'){
       VIEWS['data:drive'] = function(){ return vueDrive.apply(this, arguments) + carteDePartage(); };
     }
 
+    function carteDePartage(){
+      var conf = confLecture(), gconf = gConf();
+      var mdp = !!lsGet(CLE_MDP);
+      var lien = conf.fileId && conf.apiKey
+        ? location.origin + location.pathname + '?lire=' + encodeURIComponent(conf.fileId) + '&k=' + encodeURIComponent(conf.apiKey)
+        : '';
+      var etapes = [
+        ['Mot de passe', mdp],
+        ['Clé d\'API Google', !!conf.apiKey],
+        ['Copie publiée', !!conf.fileId],
+        ['Synchronisation automatique', !!gconf.auto]
+      ].map(function(e){ return '<span class="tag ' + (e[1] ? 'ok' : 'mute') + '" style="margin-right:6px">' + (e[1] ? '✓ ' : '○ ') + e[0] + '</span>'; }).join('');
+
+      return '<div class="card" id="roCarte" style="margin-top:16px">' +
+        '<div class="card-h"><h3>Partager en consultation seule</h3></div>' +
+        '<p class="hint">La personne ouvre le lien, tape le mot de passe et voit toute l\'appli, sans pouvoir rien modifier. Aucun compte n\'est nécessaire.</p>' +
+        '<div style="margin:10px 0">' + etapes + '</div>' +
+
+        '<label class="hint" style="display:block;margin-top:12px">Mot de passe de consultation' + (mdp ? ' (défini sur cet appareil)' : '') + '</label>' +
+        '<div style="display:flex;gap:8px;margin:6px 0"><input id="roMdp" type="password" autocomplete="new-password" placeholder="' + (mdp ? '•••••••• — saisir pour changer' : '10 caractères minimum') + '" style="flex:1">' +
+        '<button class="btn" onclick="roDefinirMdp()">' + (mdp ? 'Changer' : 'Définir') + '</button></div>' +
+
+        '<label class="hint" style="display:block;margin-top:12px">Clé d\'API Google (Google Cloud › Identifiants)</label>' +
+        '<div style="display:flex;gap:8px;margin:6px 0"><input id="roCle" value="' + esc(conf.apiKey || '') + '" placeholder="AIza…" style="flex:1">' +
+        '<button class="btn ghost" onclick="roDefinirCle()">Enregistrer</button></div>' +
+
+        '<div class="btnrow" style="margin-top:12px">' +
+          '<button class="btn" onclick="roPublier()">Publier maintenant</button>' +
+          (gconf.auto ? '' : '<button class="btn ghost" onclick="roActiverAuto()">Activer la synchronisation automatique</button>') +
+        '</div>' +
+        (conf.maj ? '<p class="hint" style="margin-top:8px">Dernière publication : ' + new Date(conf.maj).toLocaleString('fr-FR') + '</p>' : '') +
+
+        (lien
+          ? '<label class="hint" style="display:block;margin-top:12px">Lien à envoyer (le mot de passe, transmettez-le à part : SMS ou téléphone)</label>' +
+            '<div style="display:flex;gap:8px;margin:6px 0"><input id="roLien" readonly value="' + esc(lien) + '" style="flex:1" onclick="this.select()">' +
+            '<button class="btn" onclick="roCopierLien()">Copier</button></div>'
+          : '') +
+        (!mdp && conf.fileId ? '<div class="note" style="margin-top:8px">⚠ Mot de passe non défini sur cet appareil : la copie de consultation ne sera pas mise à jour depuis ici. Ressaisissez le même mot de passe.</div>' : '') +
+        '<div class="note" style="margin-top:8px">La copie est mise à jour à chaque envoi automatique sur le Drive, quelques secondes après vos modifications. Changer le mot de passe bloque aussitôt l\'accès avec l\'ancien.</div>' +
+      '</div>';
+    }
+
+    window.roDefinirMdp = function(){
+      var v = (document.getElementById('roMdp') || {}).value || '';
+      if(v.length < 10){ toast('10 caractères minimum', 'bad'); return; }
+      lsSet(CLE_MDP, v);
+      toast('Mot de passe enregistré sur cet appareil', 'ok');
+      roPublier();
+    };
+    window.roDefinirCle = function(){
+      var v = ((document.getElementById('roCle') || {}).value || '').trim();
+      confLecture().apiKey = v; save();
+      toast('Clé enregistrée', 'ok'); render();
+    };
+    window.roPublier = function(){
+      var p = gConnecte() ? Promise.resolve() : gConnexion(false);
+      p.then(function(){ return publier(true); })
+       .catch(function(e){ toast(e.message || 'Connexion Google impossible', 'bad'); render(); });
+    };
     window.roActiverAuto = function(){
-      var conf = gConf(); conf.auto = true;
-      save(); toast('Synchronisation automatique activée', 'ok'); render();
+      gConf().auto = true; save();
+      toast('Synchronisation automatique activée', 'ok'); render();
     };
     window.roCopierLien = function(){
       var el = document.getElementById('roLien'); if(!el) return;
@@ -50,47 +203,24 @@
         .then(function(){ toast('Lien copié', 'ok'); })
         .catch(function(){ document.execCommand('copy'); toast('Lien copié', 'ok'); });
     };
-    render();                                  /* réaffiche avec la carte (et l'écran Drive, défini après le démarrage) */
+    render();
     return;
   }
 
-  function carteDePartage(){
-    var conf = gConf();
-    var base = location.origin + location.pathname;
-    var lien = conf.fileId
-      ? base + '?lecture=' + encodeURIComponent(conf.fileId) + '&c=' + encodeURIComponent(gClientId())
-      : '';
-    return '<div class="card" style="margin-top:16px">' +
-      '<div class="card-h"><h3>Partager en consultation seule</h3></div>' +
-      (lien
-        ? '<p class="hint">La personne qui ouvre ce lien voit toute l\'appli, sans pouvoir rien modifier. Elle se connecte avec son compte Google, qui doit avoir accès au fichier <b>' + esc(GFILE) + '</b> en tant que <b>Lecteur</b>.</p>' +
-          '<div style="display:flex;gap:8px;margin:10px 0"><input id="roLien" readonly value="' + esc(lien) + '" style="flex:1" onclick="this.select()">' +
-          '<button class="btn" onclick="roCopierLien()">Copier</button></div>'
-        : '<p class="hint">Connectez-vous et faites une première sauvegarde sur le Drive pour obtenir le lien.</p>') +
-      (conf.auto
-        ? '<div class="note">Synchronisation automatique active : chaque modification est envoyée sur le Drive quelques secondes après, et la consultation la récupère dans la minute.</div>'
-        : '<div class="note">⚠ La synchronisation automatique est désactivée : la consultation ne montrera que la dernière sauvegarde manuelle. <button class="btn ghost" onclick="roActiverAuto()">Activer</button></div>') +
-      '<div class="note" style="margin-top:8px">Pour donner l\'accès : dans Google Drive, partagez le fichier <b>' + esc(GFILE) + '</b> avec l\'adresse Gmail de la personne (rôle Lecteur). Dans Google Cloud, ajoutez cette adresse aux utilisateurs test et le champ d\'application <code>drive.readonly</code> à l\'écran de consentement.</div>' +
-    '</div>';
-  }
-
   /* ======================= CÔTÉ CONSULTATION ======================= */
-  var FILE_ID = params.get('lecture');
-  var CLIENT_ID = params.get('c') || (typeof gClientId === 'function' ? gClientId() : '');
-  var SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
-  var API = 'https://www.googleapis.com/drive/v3/files/';
+  var FILE_ID = params.get('lire');
+  var API_KEY = params.get('k') || '';
+  var URL_FICHIER = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(FILE_ID);
   var RAFRAICHIR_MS = 60 * 1000;
+  var CLE_SESSION = 'gos_ro_session_' + FILE_ID;
 
-  var jeton = null, expire = 0, client = null, dernierModif = null, dernierCharge = null, donnees = null;
+  var mdp = null, dernierModif = null, donnees = null;
 
-  /* --- 1. Verrou : rien n'est jamais écrit, ni dans le navigateur ni sur le Drive --- */
+  /* --- 1. Verrou : rien n'est jamais écrit --- */
   var setItemOrig = Storage.prototype.setItem;
   Storage.prototype.setItem = function(k){ if(k === LS) return; return setItemOrig.apply(this, arguments); };
   var getItemOrig = Storage.prototype.getItem;
-  Storage.prototype.getItem = function(k){
-    if(k === LS) return donnees;               /* les données viennent du Drive, pas du navigateur */
-    return getItemOrig.apply(this, arguments);
-  };
+  Storage.prototype.getItem = function(k){ if(k === LS) return donnees; return getItemOrig.apply(this, arguments); };
 
   var BLOQUEES = ['saveNewClient','addClientModal','delClient','delVisite','closeRelance',
     'saveObjAnnuels','copierObjectifs','saveObjMensuels','saveSemaine','delSemaine','saveConfRdv',
@@ -108,9 +238,8 @@
       return Promise.resolve();
     };
   });
-  window.save = function(){};                  /* silencieux : certaines vues l'appellent en s'affichant */
+  window.save = function(){};
 
-  /* Navigation : on retire les écrans de saisie, d'import et de réglages */
   NAV.performance.tabs = NAV.performance.tabs.filter(function(t){ return t.id !== 'reglages'; });
   NAV.data.tabs = NAV.data.tabs.filter(function(t){ return t.id === 'rapports'; });
   var goOrig = window.go;
@@ -118,139 +247,161 @@
     if(space === 'data' && tab && tab !== 'rapports') return goOrig('pilotage', 'dashboard');
     return goOrig.apply(this, arguments);
   };
-  if(SPACE === 'data' && TAB !== 'rapports') goOrig('pilotage', 'dashboard'); else render();
 
-  /* Masque les boutons et désactive les champs qui déclenchent une modification */
   var motif = new RegExp('\\b(' + BLOQUEES.join('|') + ')\\s*\\(');
-  function verrouiller(racine){
-    (racine || document).querySelectorAll('[onclick],[onchange],[oninput],[onsubmit]').forEach(function(el){
+  function verrouiller(){
+    document.querySelectorAll('[onclick],[onchange],[oninput],[onsubmit]').forEach(function(el){
       var code = (el.getAttribute('onclick') || '') + (el.getAttribute('onchange') || '') +
                  (el.getAttribute('oninput') || '') + (el.getAttribute('onsubmit') || '');
       if(!motif.test(code)) return;
       if(el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'LABEL') el.style.display = 'none';
       else el.disabled = true;
     });
-    /* Un formulaire de saisie (carte sans tableau dont le bouton a été retiré) disparaît entièrement */
     document.querySelectorAll('#main .card').forEach(function(c){
       if(c.style.display === 'none' || c.querySelector('table')) return;
       var bloque = Array.prototype.some.call(c.querySelectorAll('[onclick],[onchange],[oninput]'),
         function(e){ return e.style.display === 'none' || e.disabled; });
       if(bloque) c.style.display = 'none';
     });
-    /* Les champs dans les tableaux et les fiches (fenêtre modale) servent à la saisie : figés */
     document.querySelectorAll('#main table input, #main table select, #main table textarea, #modalIn input, #modalIn select, #modalIn textarea')
       .forEach(function(el){ if(!el.disabled) el.disabled = true; });
   }
-  new MutationObserver(function(){ verrouiller(); }).observe(document.body, {childList:true, subtree:true});
+  new MutationObserver(verrouiller).observe(document.body, {childList:true, subtree:true});
 
-  /* --- 2. Bandeau et écran de connexion --- */
+  /* Tant que rien n'est déchiffré, on n'affiche aucune donnée locale */
+  donnees = null; load();
+  if(SPACE === 'data' && TAB !== 'rapports') goOrig('pilotage', 'dashboard'); else render();
+
+  /* --- 2. Bandeau et écran du mot de passe --- */
   var css = document.createElement('style');
   css.textContent =
     '#roBar{position:sticky;top:0;z-index:999;display:flex;align-items:center;gap:10px;flex-wrap:wrap;' +
     'padding:8px 16px;background:#1e5fb8;color:#fff;font:600 13px/1.3 system-ui,sans-serif}' +
     '#roBar .sp{flex:1}#roBar button{background:#fff;color:#1e5fb8;border:0;border-radius:6px;padding:5px 10px;font-weight:600;cursor:pointer}' +
     '#roVoile{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;' +
-    'background:rgba(10,20,40,.72);padding:16px}' +
-    '#roVoile .bx{background:#fff;color:#14213d;max-width:420px;width:100%;border-radius:14px;padding:24px;text-align:center;font:15px/1.5 system-ui,sans-serif}' +
-    '#roVoile h2{margin:0 0 8px;font-size:20px}#roVoile p{margin:0 0 16px;color:#4a5568}' +
-    '#roVoile button{background:#1e5fb8;color:#fff;border:0;border-radius:8px;padding:10px 18px;font-weight:600;font-size:15px;cursor:pointer}' +
-    '#roVoile .err{color:#c53030;margin-top:12px;font-size:13px}';
+    'background:rgba(6,14,30,.94);padding:16px}' +
+    '#roVoile form{background:#fff;color:#14213d;max-width:400px;width:100%;border-radius:14px;padding:24px;text-align:center;font:15px/1.5 system-ui,sans-serif}' +
+    '#roVoile h2{margin:0 0 6px;font-size:20px}#roVoile p{margin:0 0 16px;color:#4a5568}' +
+    '#roVoile input[type=password]{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e0;border-radius:8px;font-size:15px;margin-bottom:10px;color:#14213d;background:#fff}' +
+    '#roVoile label{display:flex;gap:6px;align-items:center;justify-content:center;font-size:13px;color:#4a5568;margin-bottom:14px}' +
+    '#roVoile button{background:#1e5fb8;color:#fff;border:0;border-radius:8px;padding:10px 18px;font-weight:600;font-size:15px;cursor:pointer;width:100%}' +
+    '#roVoile button:disabled{opacity:.6}' +
+    '#roVoile .err{color:#c53030;margin-top:12px;font-size:13px;min-height:1em}';
   document.head.appendChild(css);
 
   var barre = document.createElement('div');
   barre.id = 'roBar';
   barre.innerHTML = '<span>👁 Consultation seule</span><span class="sp"></span><span id="roMaj"></span>' +
-                    '<button id="roBtn" type="button">Actualiser</button>';
+                    '<button id="roBtn" type="button">Actualiser</button><button id="roQuit" type="button">Verrouiller</button>';
   document.body.insertBefore(barre, document.body.firstChild);
-  document.getElementById('roBtn').onclick = function(){ connecte() ? rafraichir(true) : demanderJeton(); };
+  document.getElementById('roBtn').onclick = function(){ rafraichir(true); };
+  document.getElementById('roQuit').onclick = function(){
+    try{ sessionStorage.removeItem(CLE_SESSION); localStorage.removeItem(CLE_SESSION); }catch(e){}
+    location.reload();
+  };
 
   var voile = document.createElement('div');
   voile.id = 'roVoile';
-  voile.innerHTML = '<div class="bx"><h2>GIVEDIS OS</h2><p>Accès en consultation seule. Connectez-vous avec le compte Google auquel le fichier a été partagé.</p>' +
-                    '<button id="roCnx" type="button">Se connecter avec Google</button><div class="err" id="roErr"></div></div>';
+  voile.innerHTML = '<form autocomplete="on"><h2>GIVEDIS OS</h2><p>Accès en consultation seule</p>' +
+    '<input type="password" id="roMdp" placeholder="Mot de passe" autocomplete="current-password" required>' +
+    '<label><input type="checkbox" id="roSouv"> Se souvenir sur cet appareil</label>' +
+    '<button type="submit" id="roOk">Consulter</button><div class="err" id="roErr"></div></form>';
   document.body.appendChild(voile);
-  document.getElementById('roCnx').onclick = demanderJeton;
+  voile.querySelector('form').onsubmit = function(e){
+    e.preventDefault();
+    var v = document.getElementById('roMdp').value;
+    if(!v) return;
+    ouvrir(v, document.getElementById('roSouv').checked);
+  };
 
   function erreur(msg){
     voile.style.display = 'flex';
     document.getElementById('roErr').textContent = msg;
+    document.getElementById('roOk').disabled = false;
+    document.getElementById('roOk').textContent = 'Consulter';
   }
   function majBandeau(){
-    var el = document.getElementById('roMaj'); if(!el) return;
-    if(!dernierModif){ el.textContent = ''; return; }
+    var el = document.getElementById('roMaj'); if(!el || !dernierModif) return;
     var d = new Date(dernierModif);
     el.textContent = 'Données du ' + d.toLocaleDateString('fr-FR') + ' à ' +
       d.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
-    document.getElementById('roBtn').textContent = connecte() ? 'Actualiser' : 'Reconnecter';
   }
 
-  if(!FILE_ID || !CLIENT_ID){ erreur('Lien de consultation incomplet. Demandez un nouveau lien.'); return; }
+  if(!FILE_ID || !API_KEY){ erreur('Lien de consultation incomplet. Demandez un nouveau lien.'); document.getElementById('roOk').disabled = true; return; }
 
-  /* --- 3. Connexion Google en lecture seule --- */
-  function connecte(){ return !!jeton && Date.now() < expire; }
-
-  function chargerGis(){
-    if(window.google && google.accounts && google.accounts.oauth2) return Promise.resolve();
-    return new Promise(function(ok, ko){
-      var s = document.createElement('script');
-      s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
-      s.onload = ok; s.onerror = function(){ ko(new Error('Bibliothèque Google inaccessible.')); };
-      document.head.appendChild(s);
-    });
-  }
-  var pret = chargerGis().then(function(){
-    client = google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID, scope: SCOPE,
-      callback: function(rep){
-        if(rep.error){ erreur('Connexion refusée (' + rep.error + ').'); return; }
-        jeton = rep.access_token;
-        expire = Date.now() + (rep.expires_in - 60) * 1000;
-        rafraichir(true);
-      },
-      error_callback: function(e){ erreur('Connexion interrompue' + (e && e.type ? ' (' + e.type + ')' : '') + '.'); }
-    });
-  }).catch(function(e){ erreur(e.message); });
-
-  function demanderJeton(){
-    if(!client){ pret.then(function(){ if(client) client.requestAccessToken(); }); return; }
-    client.requestAccessToken();
-  }
-
-  /* --- 4. Lecture du fichier et rafraîchissement --- */
-  function appel(suffixe){
-    return fetch(API + encodeURIComponent(FILE_ID) + suffixe, {headers:{Authorization:'Bearer ' + jeton}})
+  /* --- 3. Lecture du fichier chiffré --- */
+  function lire(suffixe){
+    return fetch(URL_FICHIER + suffixe + '&key=' + encodeURIComponent(API_KEY), {cache:'no-store'})
       .then(function(r){
-        if(r.status === 401){ jeton = null; throw new Error('Session Google expirée : cliquez sur Reconnecter.'); }
-        if(r.status === 403 || r.status === 404) throw new Error("Ce compte Google n'a pas accès au fichier. Demandez à ce qu'il vous soit partagé en tant que Lecteur.");
+        if(r.status === 404) throw new Error('Données introuvables : le lien n\'est plus valable.');
+        if(r.status === 403 || r.status === 400) throw new Error('Accès refusé par Google (clé d\'API ou partage du fichier).');
         if(!r.ok) throw new Error('Lecture impossible (' + r.status + ').');
         return r;
       });
   }
+  function telecharger(){
+    return Promise.all([
+      lire('?fields=modifiedTime').then(function(r){ return r.json(); }),
+      lire('?alt=media').then(function(r){ return r.json(); })
+    ]);
+  }
+  function appliquer(meta, txt){
+    JSON.parse(txt);
+    var premier = !dernierModif;
+    donnees = txt;
+    dernierModif = meta.modifiedTime;
+    load();
+    if(SPACE === 'data' && TAB !== 'rapports') goOrig('pilotage', 'dashboard'); else render();
+    majBandeau();
+    if(!premier) toast('Données mises à jour', 'ok');
+  }
+
+  function ouvrir(motDePasse, souvenir){
+    var b = document.getElementById('roOk'); b.disabled = true; b.textContent = 'Ouverture…';
+    document.getElementById('roErr').textContent = '';
+    telecharger().then(function(res){
+      return dechiffrer(res[1], motDePasse)
+        .catch(function(){ throw new Error('Mot de passe incorrect.'); })
+        .then(function(txt){
+          mdp = motDePasse;
+          try{
+            sessionStorage.setItem(CLE_SESSION, motDePasse);
+            if(souvenir) localStorage.setItem(CLE_SESSION, motDePasse);
+          }catch(e){}
+          appliquer(res[0], txt);
+          voile.style.display = 'none';
+        });
+    }).catch(function(e){
+      try{ sessionStorage.removeItem(CLE_SESSION); localStorage.removeItem(CLE_SESSION); }catch(x){}
+      erreur(e.message);
+    });
+  }
 
   var enCours = false;
   function rafraichir(force){
-    if(!connecte() || enCours) { majBandeau(); return; }
+    if(!mdp || enCours) return;
     enCours = true;
-    appel('?fields=modifiedTime&supportsAllDrives=true').then(function(r){ return r.json(); })
-      .then(function(meta){
-        if(!force && meta.modifiedTime === dernierModif) return;
-        return appel('?alt=media&supportsAllDrives=true').then(function(r){ return r.text(); }).then(function(txt){
-          JSON.parse(txt);                       /* vérifie le contenu avant de l'afficher */
-          donnees = txt;
-          var premier = !dernierModif;
-          dernierModif = meta.modifiedTime;
-          dernierCharge = Date.now();
-          load();
-          if(premier && SPACE === 'data' && TAB !== 'rapports'){ goOrig('pilotage', 'dashboard'); }
-          else render();
-          voile.style.display = 'none';
-          if(!premier) toast('Données mises à jour', 'ok');
+    lire('?fields=modifiedTime').then(function(r){ return r.json(); }).then(function(meta){
+      if(!force && meta.modifiedTime === dernierModif) return;
+      return lire('?alt=media').then(function(r){ return r.json(); }).then(function(paquet){
+        return dechiffrer(paquet, mdp).then(function(txt){ appliquer(meta, txt); }, function(){
+          /* le mot de passe a été changé par le propriétaire */
+          mdp = null;
+          try{ sessionStorage.removeItem(CLE_SESSION); localStorage.removeItem(CLE_SESSION); }catch(e){}
+          donnees = null; load(); render();
+          erreur('Le mot de passe a changé. Saisissez le nouveau.');
         });
-      })
-      .catch(function(e){ if(!dernierModif) erreur(e.message); else toast(e.message, 'bad'); })
-      .then(function(){ enCours = false; majBandeau(); });
+      });
+    }).catch(function(e){ toast(e.message, 'bad'); })
+      .then(function(){ enCours = false; });
   }
 
   setInterval(function(){ if(!document.hidden) rafraichir(false); }, RAFRAICHIR_MS);
   document.addEventListener('visibilitychange', function(){ if(!document.hidden) rafraichir(false); });
+
+  /* Ouverture automatique si le mot de passe est mémorisé */
+  var memo = null;
+  try{ memo = sessionStorage.getItem(CLE_SESSION) || localStorage.getItem(CLE_SESSION); }catch(e){}
+  if(memo) ouvrir(memo, false);
+  else setTimeout(function(){ var i = document.getElementById('roMdp'); if(i) i.focus(); }, 100);
 })();
