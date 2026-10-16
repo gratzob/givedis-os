@@ -591,6 +591,7 @@ function renderShell(){
 }
 
 function render(){
+  VIS_CA_IDX = null;
   Object.values(CHARTS).forEach(c => { try{ c.destroy(); }catch(e){} });
   CHARTS = {};
   if(!NAV[SPACE]) SPACE = 'pilotage';
@@ -814,7 +815,7 @@ function stats(com, mk){
   const vis = DB.visites.filter(v => v.commercial===com && monthKey(v.date)===mk);
   const commandes = vis.filter(v => v.resultat === 'Commande').length;
   const devis     = vis.filter(v => v.resultat === 'Devis émis').length;
-  const nouveaux  = DB.clients.filter(c => c.commercial===com && monthKey(c.dateOuverture)===mk).length;
+  const nouveaux  = nouveauxDuMois(com, mk).length;
 
   return {
     mk, com, ca, marge, caSaisi, margeSaisi,
@@ -881,9 +882,42 @@ function premiereCommande(c){
   const v = (c.caByMonth||{})[mk];
   return v ? {date: c.dateOuverture, montant: +v} : null;
 }
+/* ---------- Règle « nouveau compte » ----------
+   Un client compte comme nouveau compte le mois M s'il réalise plus de
+   250 € de chiffre ce mois-là, sans aucun chiffre de janvier de la même
+   année jusqu'au mois précédent (client jamais actif, ou client dormant
+   qui n'a rien commandé depuis le début de l'année). */
+function seuilNouveau(){
+  const s = (DB.settings||{}).seuilNouveau;
+  return s != null && s !== '' ? +s : 250;
+}
+/* Chiffre d'un client sur un mois : relevé comptable / saisie, à défaut les visites chiffrées. */
+var VIS_CA_IDX = null; /* clientId|mois → CA des visites ; vidé à chaque rendu */
+function caClientMois(c, m){
+  const v = (c.caByMonth||{})[m];
+  if(v != null && v !== '') return +v || 0;
+  if(!VIS_CA_IDX){
+    VIS_CA_IDX = {};
+    DB.visites.forEach(x => { if(+x.ca){ const k = x.clientId + '|' + monthKey(x.date); VIS_CA_IDX[k] = (VIS_CA_IDX[k]||0) + (+x.ca); } });
+  }
+  return VIS_CA_IDX[c.id + '|' + m] || 0;
+}
+/* Mois (AAAA-MM) où le client devient nouveau compte sur l'exercice y, ou null. */
+function moisNouveau(c, y){
+  y = String(y);
+  const lim = y === todayISO().slice(0,4) ? curMonth() : y + '-12';
+  for(const m of monthsOfYear(y)){
+    if(m > lim) break;
+    const ca = caClientMois(c, m);
+    if(ca > 0) return ca > seuilNouveau() ? m : null; /* premier chiffre de l'année : retenu ou écarté */
+  }
+  return null;
+}
+function nouveauxDuMois(com, mk){
+  return DB.clients.filter(c => c.commercial === com && moisNouveau(c, String(mk).slice(0,4)) === mk);
+}
 function nvxAuDessus(com, mk, seuil){
-  return DB.clients.filter(c => c.commercial === com && monthKey(c.dateOuverture) === mk)
-    .filter(c => { const p = premiereCommande(c); return p && p.montant >= (+seuil||0); }).length;
+  return nouveauxDuMois(com, mk).filter(c => caClientMois(c, mk) >= (+seuil||0)).length;
 }
 
 /* ==========================================================================
@@ -1653,18 +1687,17 @@ function saveOfficiels(){
 /* ---------- Nouveaux clients ---------- */
 VIEWS['performance:nouveaux'] = () => {
   const y = YEAR, ms = monthsOfYear(y);
-  const nvx = DB.clients.filter(c => (c.dateOuverture||'').startsWith(y))
-    .sort((a,b)=>(b.dateOuverture||'').localeCompare(a.dateOuverture||''));
-  const caDe = c => { const p = premiereCommande(c); return p ? p.montant : 0; };
+  const nvx = listeNouveaux(y);
+  const caDe = c => caClientMois(c, moisNouveau(c, y));
   const total = nvx.reduce((s,c)=>s+caDe(c),0);
   const seuil = (DB.primes.criteres.find(c=>c.type==='nvxseuil')||{}).param || 0;
   const auSeuil = seuil ? nvx.filter(c=>caDe(c)>=seuil).length : 0;
 
   return `
   <div class="grid g4" style="margin-bottom:16px">
-    <div class="kpi ok"><div class="lab">Ouverts en ${y}</div><div class="val">${nvx.length}</div></div>
-    <div class="kpi"><div class="lab">Chiffre réalisé</div><div class="val">${eur(total)}</div><div class="sub">premières commandes cumulées</div></div>
-    <div class="kpi info"><div class="lab">Ce mois</div><div class="val">${nvx.filter(c=>monthKey(c.dateOuverture)===curMonth()).length}</div><div class="sub">${monthLabel(curMonth())}</div></div>
+    <div class="kpi ok"><div class="lab">Nouveaux comptes ${y}</div><div class="val">${nvx.length}</div></div>
+    <div class="kpi"><div class="lab">Chiffre réalisé</div><div class="val">${eur(total)}</div><div class="sub">chiffre du mois d'ouverture</div></div>
+    <div class="kpi info"><div class="lab">Ce mois</div><div class="val">${nvx.filter(c=>moisNouveau(c,y)===curMonth()).length}</div><div class="sub">${monthLabel(curMonth())}</div></div>
     <div class="kpi ${auSeuil?'ok':'bad'}"><div class="lab">Au-dessus de ${seuil?eur(seuil):'—'}</div><div class="val">${auSeuil}</div><div class="sub">critère de prime</div></div>
   </div>
 
@@ -1694,7 +1727,7 @@ VIEWS['performance:nouveaux'] = () => {
         <th class="num">Total Nb</th><th class="num">Total chiffre</th></tr></thead>
       <tbody>${ms.map(m=>{
         const parCom = ACTIFS().map(c=>{
-          const l = nvx.filter(x=>x.commercial===c.id && monthKey(x.dateOuverture)===m);
+          const l = nvx.filter(x=>x.commercial===c.id && moisNouveau(x,y)===m);
           return {n:l.length, ca:l.reduce((s,x)=>s+caDe(x),0)};
         });
         const tn = parCom.reduce((s,x)=>s+x.n,0), tc = parCom.reduce((s,x)=>s+x.ca,0);
@@ -1718,25 +1751,23 @@ VIEWS['performance:nouveaux'] = () => {
   <div class="card"><div class="card-h"><h3>Ouvertures par mois</h3></div><div class="chartbox sm"><canvas id="chNvx"></canvas></div></div>
 
   <div class="card">
-    <div class="card-h"><h3>Clients ouverts en ${y}</h3>
+    <div class="card-h"><h3>Nouveaux comptes ${y}</h3>
       <button class="btn sm" onclick="saveNouveaux()">Enregistrer les modifications</button></div>
-    <p class="hint" style="margin-bottom:12px">Mois, commercial et chiffre sont modifiables directement dans le tableau. Le badge indique d'où vient le montant.</p>
+    <p class="hint" style="margin-bottom:12px">Seuls sont retenus les comptes ayant fait plus de ${eur(seuilNouveau())} de chiffre dans le mois sans aucun chiffre depuis janvier ${y}. Le mois est déduit du chiffre ; commercial et chiffre restent modifiables.</p>
     ${nvx.length?`<div class="tw"><table>
       <thead><tr><th>Client</th><th>Commercial</th><th>Mois</th><th class="num">Chiffre effectué</th><th>Origine</th><th class="num">Visites</th><th></th></tr></thead>
       <tbody>${nvx.map((c,i)=>{
-        const p = premiereCommande(c);
+        const mn = moisNouveau(c, y), cam = caClientMois(c, mn);
         return `<tr>
         <td><strong>${esc(c.nom)}</strong>${c.reseau?`<div class="hint">${esc(c.reseau)}${c.dept?' · '+esc(c.dept):''}</div>`:''}</td>
         <td><select id="nc_com_${i}">${DB.commerciaux.map(x=>`<option value="${x.id}" ${x.id===c.commercial?'selected':''}>${esc(x.nom)}</option>`).join('')}</select></td>
-        <td><input type="month" id="nc_moi_${i}" value="${esc(monthKey(c.dateOuverture))}" style="padding:6px 8px"></td>
-        <td class="num"><input type="number" id="nc_ca_${i}" value="${c.premiereCommande!=null&&c.premiereCommande!==''?c.premiereCommande:''}" placeholder="${p?Math.round(p.montant):0}" style="text-align:right;padding:6px 8px"></td>
-        <td>${c.premiereCommande!=null&&c.premiereCommande!==''
-              ? `<span class="tag warn">saisi</span>`
-              : p ? `<span class="tag ok">${p.manuel?'saisi':'visite'}</span>` : `<span class="tag mute">aucun</span>`}
-            ${seuil&&p&&p.montant>=seuil?` <span class="tag ok">≥ ${eur(seuil)}</span>`:''}</td>
+        <td class="mono">${monthLabel(mn)}</td>
+        <td class="num"><input type="number" id="nc_ca_${i}" value="${Math.round(cam*100)/100}" style="text-align:right;padding:6px 8px"></td>
+        <td>${(c.caByMonth||{})[mn] != null && (c.caByMonth||{})[mn] !== '' ? `<span class="tag ok">relevé / saisi</span>` : `<span class="tag mute">visites</span>`}
+            ${seuil&&cam>=seuil?` <span class="tag ok">≥ ${eur(seuil)}</span>`:''}</td>
         <td class="num mono">${DB.visites.filter(v=>v.clientId===c.id).length}</td>
         <td><button class="btn ghost sm" onclick="delClient('${c.id}')">Retirer</button></td></tr>`;}).join('')}</tbody></table></div>`
-    :emptyState('◈','Aucun client ouvert sur cet exercice.')}
+    :emptyState('◈','Aucun nouveau compte sur cet exercice.')}
   </div>`;
 };
 
@@ -1762,26 +1793,29 @@ function addNouveauClient(){
     c.premiereCommande = ca;
     c.caByMonth[mois] = Math.max(+c.caByMonth[mois]||0, ca);
   }
-  save(); toast(c.nom + ' déclaré en ' + monthLabel(mois), 'ok'); render();
+  save();
+  if(moisNouveau(c, mois.slice(0,4)) === mois) toast(c.nom + ' déclaré en ' + monthLabel(mois), 'ok');
+  else toast(c.nom + ' enregistré, mais non retenu comme nouveau compte : il faut plus de ' + eur(seuilNouveau()) + ' de chiffre dans le mois et aucun chiffre depuis janvier.', 'bad');
+  render();
 }
 
+function listeNouveaux(y){
+  return DB.clients.filter(c => moisNouveau(c, y))
+    .sort((a,b)=>moisNouveau(b, y).localeCompare(moisNouveau(a, y)));
+}
 function saveNouveaux(){
-  const nvx = DB.clients.filter(c => (c.dateOuverture||'').startsWith(YEAR))
-    .sort((a,b)=>(b.dateOuverture||'').localeCompare(a.dateOuverture||''));
+  const nvx = listeNouveaux(YEAR);
   let n = 0;
   nvx.forEach((c,i)=>{
     const com = document.getElementById('nc_com_'+i);
-    const moi = document.getElementById('nc_moi_'+i);
     const ca  = document.getElementById('nc_ca_'+i);
-    if(!com || !moi || !ca) return;
+    if(!com || !ca) return;
+    const mn = moisNouveau(c, YEAR);
     if(com.value !== c.commercial){ c.commercial = com.value; n++; }
-    if(moi.value && moi.value !== monthKey(c.dateOuverture)){ c.dateOuverture = moi.value + '-01'; n++; }
     const v = ca.value === '' ? null : parseFloat(ca.value);
-    const avant = c.premiereCommande == null ? null : +c.premiereCommande;
-    if(v !== avant){
-      c.premiereCommande = v;
-      if(v != null) c.caByMonth[monthKey(c.dateOuverture)] = Math.max(+c.caByMonth[monthKey(c.dateOuverture)]||0, v);
-      n++;
+    if(v != null && !isNaN(v) && Math.abs(v - caClientMois(c, mn)) > 0.005){
+      c.caByMonth = c.caByMonth || {};
+      c.caByMonth[mn] = v; n++;
     }
   });
   save();
@@ -1794,7 +1828,7 @@ AFTER['performance:nouveaux'] = () => {
   const el = document.getElementById('chNvx'); if(!el) return;
   CHARTS.nvx = new Chart(el,{type:'bar',data:{labels:ms.map(m=>monthLabel(m).split(' ')[0]),
     datasets:ACTIFS().map((c,i)=>({label:c.nom,
-      data:ms.map(m=>DB.clients.filter(x=>x.commercial===c.id&&monthKey(x.dateOuverture)===m).length),
+      data:ms.map(m=>nouveauxDuMois(c.id, m).length),
       backgroundColor:PALETTE[i%6],borderRadius:4}))},
     options:{...CHART_BASE,scales:{...CHART_BASE.scales,x:{...CHART_BASE.scales.x,stacked:true},y:{...CHART_BASE.scales.y,stacked:true}}}});
 };
@@ -1850,6 +1884,10 @@ VIEWS['performance:primes'] = () => {
           <td class="num mono" style="font-size:17px;font-weight:700;color:var(--acc2)">${eur(p.total)}</td>
         </tr></tfoot>
       </table></div>
+      ${(() => {
+        const l = nouveauxDuMois(c.id, PRIME_MOIS);
+        return `<div class="hint" style="margin-top:10px"><strong>Nouveaux comptes retenus (${l.length})</strong> — plus de ${eur(seuilNouveau())} de chiffre dans le mois, sans aucun chiffre depuis janvier ${PRIME_MOIS.slice(0,4)}${l.length ? ' : ' + l.map(x => esc(x.nom) + ' (' + eur(caClientMois(x, PRIME_MOIS)) + ')').join(', ') : '.'}</div>`;
+      })()}
     </div>`).join('')}`;
 };
 
@@ -1932,7 +1970,8 @@ VIEWS['performance:reglages'] = () => {
     </div>
     <div class="note" style="margin-top:10px">
       <strong>Atteinte de l'objectif CA</strong> mesure le rapport entre le CA réalisé et l'objectif du mois : une cible à 110 récompense un dépassement de 10 %.
-      <strong>Nouveaux clients — 1re commande ≥ seuil</strong> compte, parmi les clients ouverts dans le mois, ceux dont la première commande atteint le seuil ; le montant est lu sur la visite chiffrée la plus ancienne, ou à défaut sur le CA du mois d'ouverture.
+      <strong>Nouveaux clients</strong> : un compte n'est retenu comme nouveau que s'il réalise plus de ${eur(seuilNouveau())} de chiffre dans le mois <em>et</em> n'a fait aucun chiffre depuis janvier de l'année (ou n'en a jamais fait). Le chiffre est lu sur les relevés comptables, à défaut sur les visites chiffrées.
+      <strong>Nouveaux clients — 1re commande ≥ seuil</strong> applique en plus le seuil du paramètre au chiffre du mois d'ouverture.
     </div>
     <p class="hint" style="margin-top:10px">La colonne <strong>Calcul</strong> permet à un critère de déroger au réglage général : un bonus de dépassement se prête mal au prorata, il se gagne ou ne se gagne pas.</p>
   </div>`;
@@ -3412,7 +3451,7 @@ VIEWS['data:compta'] = () => {
     <div class="card-h"><h3>Ce que l'import alimente</h3></div>
     <p class="hint">Le CA par client et par mois nourrit la fiche de chaque client, l'écran Rentabilité et le calcul des premières commandes. Les totaux remplissent les chiffres officiels du mois pour ce commercial, ceux qui priment sur la saisie hebdomadaire dans le tableau de bord et les primes. Le récapitulatif avec marge remplit en plus la grille des taux par client et par mois, et le montant de marge officiel.</p>
     <div class="note" style="margin-top:12px">Un même nom de client chez deux commerciaux donne <strong>deux fiches distinctes</strong>, une par commercial. Les fusionner mélangerait leurs chiffres et le second import écraserait le premier.</div>
-    <div class="note warn" style="margin-top:12px">Les clients absents de la base sont créés <strong>sans date d'ouverture</strong> : la comptabilité ne dit pas s'il s'agit d'une ouverture ou d'un client de longue date. Ils ne compteront donc pas comme nouveaux clients tant que vous ne les aurez pas déclarés dans Performance › Nouveaux clients.</div>
+    <div class="note warn" style="margin-top:12px">Un client compte comme <strong>nouveau compte</strong> le mois où il dépasse ${eur(seuilNouveau())} de chiffre sans en avoir fait aucun depuis janvier de l'année. Importez les relevés depuis janvier pour que la détection soit fiable.</div>
   </div>`;
 };
 
