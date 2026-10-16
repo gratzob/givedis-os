@@ -50,6 +50,7 @@
         .then(function(){ toast('Lien copié', 'ok'); })
         .catch(function(){ document.execCommand('copy'); toast('Lien copié', 'ok'); });
     };
+    render();                                  /* réaffiche avec la carte (et l'écran Drive, défini après le démarrage) */
     return;
   }
 
@@ -117,6 +118,7 @@
     if(space === 'data' && tab && tab !== 'rapports') return goOrig('pilotage', 'dashboard');
     return goOrig.apply(this, arguments);
   };
+  if(SPACE === 'data' && TAB !== 'rapports') goOrig('pilotage', 'dashboard'); else render();
 
   /* Masque les boutons et désactive les champs qui déclenchent une modification */
   var motif = new RegExp('\\b(' + BLOQUEES.join('|') + ')\\s*\\(');
