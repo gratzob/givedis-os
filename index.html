@@ -13,6 +13,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 :root{
   --bg:#060c18; --bg2:#0b1424; --panel:#101c31; --panel2:#16253f;
@@ -671,8 +674,8 @@ function clientModal(id){
     <h4 style="margin:18px 0 8px">Historique des visites</h4>
     ${vs.length?`<div class="tw"><table><thead><tr><th>Date</th><th>Commercial</th><th>Type</th><th>Résultat</th><th>Compte rendu</th></tr></thead>
       <tbody>${vs.map(v=>`<tr><td class="mono">${fdate(v.date)}</td><td>${esc(whoName(v.commercial))}</td><td>${esc(v.type||'—')}</td>
-      <td><span class="tag ${tagResultat(v.resultat)}">${esc(v.resultat)}</span></td>
-      <td style="color:var(--ink2)">${esc(v.compteRendu||'—')}</td></tr>`).join('')}</tbody></table></div>`
+      <td><span class="tag ${tagResultat(v.resultat)}">${esc(v.resultat)}</span>${+v.montantCommande?`<div class="hint">cde ${eur(v.montantCommande)}</div>`:+v.montantDevis?`<div class="hint">devis ${eur(v.montantDevis)}</div>`:''}</td>
+      <td style="color:var(--ink2)">${esc(v.compteRendu||'—')}${v.contact&&(v.contact.nom||v.contact.prenom)?`<div class="hint">👤 ${esc((v.contact.prenom||'')+' '+(v.contact.nom||''))}</div>`:''}</td></tr>`).join('')}</tbody></table></div>`
     :`<p class="hint">Aucune visite importée pour ce client.</p>`}
     <div class="btnrow" style="margin-top:18px">
       <button class="btn ghost" onclick="closeModal()">Fermer</button>
@@ -717,7 +720,7 @@ VIEWS['pilotage:relances'] = () => {
 
   <div class="card">
     <div class="card-h"><h3>Relances à suivre</h3>${selCom}</div>
-    <p class="hint" style="margin-bottom:12px">Alimenté par les visites importées dont le résultat est « À relancer ».</p>
+    <p class="hint" style="margin-bottom:12px">Alimenté en direct par les relances programmées sur le terrain (et les visites importées « À relancer »). Clôturer ici la clôture aussi chez le commercial.</p>
     ${rel.length?`<div class="tw"><table><thead><tr><th>Échéance</th><th>Commercial</th><th>Client</th><th>Contexte</th><th></th></tr></thead>
       <tbody>${rel.map(v=>{
         const d = v.relanceDate ? daysSince(v.relanceDate) : null;
@@ -1419,7 +1422,7 @@ VIEWS['pilotage:visites'] = () => {
       <tbody>${vs.slice(0,400).map(v=>`<tr>
         <td class="mono">${fdate(v.date)}</td><td>${esc(whoName(v.commercial))}</td>
         <td><strong>${esc(v.clientNom)}</strong></td><td>${esc(v.type||'—')}</td>
-        <td><span class="tag ${(RESULTATS.find(r=>r.v===v.resultat)||{k:'mute'}).k}">${esc(v.resultat)}</span></td>
+        <td><span class="tag ${(RESULTATS.find(r=>r.v===v.resultat)||{k:'mute'}).k}">${esc(v.resultat)}</span>${+v.montantCommande?`<div class="hint">cde ${eur(v.montantCommande)} · info</div>`:+v.montantDevis?`<div class="hint">devis ${eur(v.montantDevis)} · info</div>`:''}</td>
         <td class="num mono">${v.ca?eur(v.ca):'—'}</td>
         <td style="max-width:320px;color:var(--ink2)">${esc((v.compteRendu||'').slice(0,120))}${(v.compteRendu||'').length>120?'…':''}</td></tr>`).join('')}</tbody></table></div>`
     :emptyState('◔','Aucune visite importée.',`<button class="btn" onclick="go('data','fichiers')">Importer des visites</button>`)}
@@ -2629,7 +2632,7 @@ VIEWS['data:fichiers'] = () => `
   <div class="card" style="background:linear-gradient(135deg,var(--panel),var(--panel2))">
     <div class="eyebrow">Point d'entrée des données terrain</div>
     <h2 style="font-size:23px;margin-bottom:6px">Importer les visites de l'équipe</h2>
-    <p class="hint">Clément et Lorris saisissent leurs visites dans leur application de terrain et vous envoient leur export. Vous le déposez ici : les clients manquants sont créés, les doublons écartés, et le tableau de bord se met à jour.</p>
+    <p class="hint">Les visites arrivent désormais toutes seules via <a href="#" onclick="go('data','synchro');return false">Synchro terrain</a>. Cet import reste disponible pour d'anciens exports : les clients manquants sont créés et les doublons écartés.</p>
   </div>
 
   <div class="card">
@@ -3893,6 +3896,227 @@ AFTER['data:drive'] = () => {
 };
 
 
+</script>
+<script>
+/* ==========================================================================
+   Synchro terrain — les visites saisies par Clément et Lorris dans
+   l'application Suivi Visites arrivent ici toutes seules (Firebase).
+   Les montants de devis / commande sont rangés à part (montantDevis,
+   montantCommande) : ils n'alimentent jamais le CA, la marge ni les primes.
+   ========================================================================== */
+const FBS_CONF = {
+  apiKey: "AIzaSyA1C9-0Wr4AmSUtWnaTiaR7mPwQhdlmj-k",
+  authDomain: "ultimate-crm-givedis-b27f8.firebaseapp.com",
+  projectId: "ultimate-crm-givedis-b27f8",
+  storageBucket: "ultimate-crm-givedis-b27f8.firebasestorage.app",
+  messagingSenderId: "1014289476140",
+  appId: "1:1014289476140:web:229f0573bdcd0411c97f89"
+};
+const FBS_ADMIN = 'julien@givedis.app';
+const FBS_NOMS = {'7mp2p8rlyCclaGYnWBhIr727Vs93':'Clément', 'zVts2biz4uSQC6LjbtL9VMFrZOh1':'Lorris'};
+const FBS = {app:null, auth:null, db:null, user:null, unsub:[], etat:'off', err:'', derniere:null, pret:false};
+
+function fbsDisponible(){
+  return !new URLSearchParams(location.search).has('lire') && typeof firebase !== 'undefined';
+}
+function fbsInit(){
+  if(FBS.app || !fbsDisponible()) return;
+  try{
+    FBS.app = firebase.initializeApp(FBS_CONF, 'givedis-os');
+    FBS.auth = FBS.app.auth();
+    FBS.db = FBS.app.firestore();
+    FBS.auth.onAuthStateChanged(u => {
+      FBS.user = u; FBS.pret = true;
+      fbsStop();
+      if(u) fbsEcouter(); else { FBS.etat = 'off'; }
+      fbsRafraichirVue();
+    });
+  }catch(e){ FBS.err = e.message; }
+}
+function fbsStop(){ FBS.unsub.forEach(f => { try{ f(); }catch(e){} }); FBS.unsub = []; }
+function fbsIgnores(){
+  DB.settings.syncIgnores = DB.settings.syncIgnores || [];
+  return DB.settings.syncIgnores;
+}
+
+function fbsConnecter(){
+  const el = document.getElementById('fbsPin');
+  const pin = el ? el.value.trim() : '';
+  if(!pin){ toast('Tapez votre code PIN', 'bad'); return; }
+  FBS.auth.signInWithEmailAndPassword(FBS_ADMIN, pin)
+    .then(() => toast('Synchro terrain connectée', 'ok'))
+    .catch(e => toast(String(e.code||'').includes('network') ? 'Pas de réseau' : 'Code PIN incorrect', 'bad'));
+}
+function fbsDeconnecter(){
+  if(!confirm('Couper la synchro terrain sur ce poste ? Les visites déjà reçues restent dans GIVEDIS OS.')) return;
+  FBS.auth.signOut();
+}
+
+function fbsEcouter(){
+  FBS.etat = 'connexion';
+  FBS.unsub.push(FBS.db.collection('visites').onSnapshot(snap => {
+    FBS.etat = 'ok'; FBS.err = ''; FBS.derniere = new Date();
+    fbsAppliquerVisites(snap);
+  }, e => { FBS.etat = 'erreur'; FBS.err = e.message; fbsRafraichirVue(); }));
+  FBS.unsub.push(FBS.db.collection('portefeuilles').onSnapshot(snap => {
+    fbsAppliquerPortefeuilles(snap);
+  }, e => { FBS.err = e.message; }));
+}
+
+function fbsComId(r){ return commercialId(r.commercial || FBS_NOMS[r.uid] || 'Clément'); }
+
+function fbsAppliquerVisites(snap){
+  const ignores = new Set(fbsIgnores());
+  const vus = new Set();
+  let nouveaux = 0, modifies = 0, retires = 0;
+  snap.docs.forEach(d => {
+    const r = d.data();
+    if(!r || !r.id || !r.client || !r.date) return;
+    vus.add(r.id);
+    if(ignores.has(r.id)) return;
+    const com = fbsComId(r);
+    const cl = ensureClient(r.client, com, {source:'terrain'});
+    if(!cl) return;
+    const rec = {
+      clientId: cl.id, clientNom: cl.nom, commercial: com, date: r.date,
+      type: r.type || '', resultat: r.resultat || 'Information',
+      relance: !!r.relance && !r.relanceFaite, relanceDate: r.relanceDate || null,
+      compteRendu: r.compteRendu || '',
+      contact: {nom:r.contactNom||'', prenom:r.contactPrenom||'', tel:r.contactTel||'', email:r.contactEmail||''},
+      montantDevis: +r.montantDevis || 0, montantCommande: +r.montantCommande || 0,
+      createdAt: r.createdAt || '', fsId: r.id, source: 'terrain'
+    };
+    let v = DB.visites.find(x => x.fsId === r.id) || DB.visites.find(x => x.id === r.id);
+    /* Visite déjà reçue par l'ancien import de fichier : on la rattache au lieu de la doubler. */
+    if(!v) v = DB.visites.find(x => !x.fsId && x.clientId === cl.id && x.date === r.date && (x.compteRendu||'') === (r.compteRendu||''));
+    if(v){
+      const avant = JSON.stringify(v);
+      Object.assign(v, rec);            /* le champ ca d'origine n'est jamais touché */
+      if(JSON.stringify(v) !== avant) modifies++;
+    } else {
+      DB.visites.push(Object.assign({id: r.id, ca: 0}, rec));
+      nouveaux++;
+    }
+    /* Contact du client : complété s'il est vide. */
+    if(cl.contact && !cl.contact.nom && !cl.contact.tel && (r.contactNom || r.contactTel)){
+      cl.contact = {nom:r.contactNom||'', prenom:r.contactPrenom||'', tel:r.contactTel||'', email:r.contactEmail||''};
+    }
+  });
+  /* Visite supprimée côté terrain : retirée ici aussi (uniquement sur réponse du serveur). */
+  if(!snap.metadata.fromCache){
+    const avant = DB.visites.length;
+    DB.visites = DB.visites.filter(v => !v.fsId || vus.has(v.fsId));
+    retires = avant - DB.visites.length;
+  }
+  if(nouveaux || modifies || retires){
+    DB.meta.lastSync = new Date().toISOString();
+    save();
+    if(nouveaux && FBS.premierPassage) toast(nouveaux + (nouveaux>1 ? ' nouvelles visites reçues' : ' nouvelle visite reçue'), 'ok');
+  }
+  FBS.premierPassage = true;
+  fbsRafraichirVue(nouveaux || modifies || retires);
+}
+
+function fbsAppliquerPortefeuilles(snap){
+  let n = 0;
+  snap.docs.forEach(d => {
+    const p = d.data() || {};
+    const com = commercialId(p.commercial || FBS_NOMS[d.id] || 'Clément');
+    (p.clients || []).forEach(c => {
+      const nom = typeof c === 'string' ? c : (c && c.client);
+      if(nom && !findClient(nom, com)){ ensureClient(nom, com, {source:'terrain'}); n++; }
+    });
+  });
+  if(n){ save(); fbsRafraichirVue(true); }
+}
+
+/* Ne redessine que les écrans de consultation, jamais un formulaire en cours. */
+function fbsRafraichirVue(donnees){
+  const ecranSynchro = SPACE === 'data' && TAB === 'synchro';
+  const modalOuverte = document.getElementById('modal') && document.getElementById('modal').classList.contains('on');
+  if(ecranSynchro || (donnees && SPACE === 'pilotage' && !modalOuverte)) render();
+}
+
+/* Clôturer une relance ici la clôture aussi chez le commercial. */
+const _fbsCloseRelance = closeRelance;
+closeRelance = function(id){
+  const v = DB.visites.find(x => x.id === id);
+  _fbsCloseRelance(id);
+  if(v && v.fsId && FBS.user){
+    FBS.db.collection('visites').doc(v.fsId)
+      .update({relanceFaite:true, relanceFaiteLe:todayISO(), relanceFaitePar:'Julien', updatedAt:new Date().toISOString()})
+      .catch(e => toast('Relance clôturée ici, mais pas en ligne : ' + e.message, 'bad'));
+  }
+};
+/* Supprimer une visite synchronisée : elle ne revient pas à la synchro suivante.
+   La visite reste chez le commercial (rien n'est effacé en ligne). */
+const _fbsDelVisite = delVisite;
+delVisite = function(id){
+  const v = DB.visites.find(x => x.id === id);
+  const fs = v && v.fsId;
+  _fbsDelVisite(id);
+  if(fs && !DB.visites.some(x => x.id === id)){ fbsIgnores().push(fs); save(); }
+};
+const _fbsDelClient = delClient;
+delClient = function(id){
+  const fsIds = DB.visites.filter(v => v.clientId === id && v.fsId).map(v => v.fsId);
+  _fbsDelClient(id);
+  if(fsIds.length && !DB.clients.some(c => c.id === id)){ fbsIgnores().push(...fsIds); save(); }
+};
+
+/* Résultats propres à l'appli terrain : couleurs dans les tableaux. */
+[['Vente','ok'],['Prise de commande','ok'],['Ouverture de compte remplie','ok'],['Devis établi','info'],['Suivi simple','mute']]
+  .forEach(([v,k]) => { if(!RESULTATS.some(r => r.v === v)) RESULTATS.push({v, k}); });
+
+/* ---------- Écran Données › Synchro terrain ---------- */
+NAV.data.tabs.unshift({id:'synchro', label:'Synchro terrain'});
+VIEWS['data:synchro'] = () => {
+  if(!fbsDisponible()) return `<div class="card"><div class="note warn">Synchro indisponible (bibliothèque Firebase non chargée ou mode consultation).</div></div>`;
+  const recues = DB.visites.filter(v => v.fsId);
+  const parCom = DB.commerciaux.map(c => {
+    const vs = recues.filter(v => v.commercial === c.id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+    return {c, n: vs.length, der: vs[0], rel: vs.filter(v => v.relance).length,
+      devis: vs.reduce((s,v)=>s+(+v.montantDevis||0),0), cdes: vs.reduce((s,v)=>s+(+v.montantCommande||0),0)};
+  });
+  const etat = !FBS.pret ? ['mute','Initialisation…']
+    : !FBS.user ? ['warn','Non connectée sur ce poste']
+    : FBS.etat === 'erreur' ? ['bad','Erreur : ' + esc(FBS.err)]
+    : FBS.etat === 'ok' ? ['ok','En direct']
+    : ['info','Connexion…'];
+  return `
+  <div class="card">
+    <div class="card-h"><div><div class="eyebrow">Suivi Visites → GIVEDIS OS</div><h3>Synchro terrain</h3></div>
+      <span class="tag ${etat[0]}">${etat[1]}</span></div>
+    <p class="hint" style="margin-bottom:14px">Les visites saisies par l'équipe dans l'application de terrain arrivent ici automatiquement, sans import. Les relances, les nouveaux clients et les portefeuilles suivent aussi. Les montants de devis et de commande sont affichés pour information : ils n'entrent ni dans le CA, ni dans la marge, ni dans les primes.</p>
+    ${!FBS.user ? `
+      <div class="grid g2" style="align-items:end;max-width:520px">
+        <div><label class="lab" style="display:block;margin-bottom:6px">Votre code PIN responsable</label>
+          <input id="fbsPin" type="password" inputmode="numeric" placeholder="••••••" onkeydown="if(event.key==='Enter')fbsConnecter()"></div>
+        <div><button class="btn" onclick="fbsConnecter()">Activer la synchro</button></div>
+      </div>
+      <p class="hint" style="margin-top:10px">À faire une seule fois par poste : la connexion est mémorisée.</p>`
+    : `
+      <div class="note ok">Connecté en tant que responsable · ${recues.length} visite${recues.length>1?'s':''} reçue${recues.length>1?'s':''}${FBS.derniere?' · dernière mise à jour à '+FBS.derniere.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}):''}</div>
+      <div class="tw" style="margin-top:14px"><table>
+        <thead><tr><th>Commercial</th><th class="num">Visites reçues</th><th>Dernière visite</th><th class="num">Relances ouvertes</th><th class="num">Devis (info)</th><th class="num">Commandes (info)</th></tr></thead>
+        <tbody>${parCom.map(x => `<tr><td><strong>${esc(x.c.nom)}</strong></td><td class="num mono">${x.n}</td>
+          <td>${x.der ? fdate(x.der.date)+' · '+esc(x.der.clientNom) : '—'}</td><td class="num mono">${x.rel}</td>
+          <td class="num mono">${x.devis?eur(x.devis):'—'}</td><td class="num mono">${x.cdes?eur(x.cdes):'—'}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <div class="btnrow" style="margin-top:16px">
+        <button class="btn ghost" onclick="go('pilotage','visites')">Voir les visites</button>
+        <button class="btn ghost" onclick="go('pilotage','relances')">Relances & dormants</button>
+        <button class="btn ghost sm" onclick="fbsDeconnecter()">Couper la synchro sur ce poste</button>
+      </div>`}
+  </div>`;
+};
+
+fbsInit();
+/* L'onglet est ajouté après le premier affichage : on remet juste la navigation à jour. */
+if(fbsDisponible()){
+  if(SPACE === 'data' && localStorage.getItem('gos_tab') === 'synchro'){ TAB = 'synchro'; render(); }
+  else renderShell();
+}
 </script>
 <script src="lecture.js"></script>
 </body>
