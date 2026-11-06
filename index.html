@@ -3827,8 +3827,10 @@ function chargerCompta(input){
           fichier: file.name,
           commercial: detecteCommercial(file.name) || (ACTIFS()[0] || {}).id,
           mois: detecteMois(file.name) || curMonth(),
+          moisNum: (detecteMois(file.name) || curMonth()).slice(5,7),
+          annee: '',   /* l'année n'est jamais devinée : elle est choisie ou saisie à l'import */
           detecteCom: !!detecteCommercial(file.name),
-          detecteMois: lu.type === 'recap' ? true : !!detecteMois(file.name),
+          detecteMois: lu.type === 'recap' ? true : !!MOIS_FR.find(m => normKey(file.name).includes(m)),
           ...lu
         });
       }catch(err){
@@ -3842,12 +3844,46 @@ function chargerCompta(input){
 }
 
 function comptaMaj(i, champ, val){ COMPTA[i][champ] = val; render(); }
+
+/* Année d'import : obligatoire, choisie dans la liste ou saisie au clavier. */
+function comptaAnneeOk(x){ return /^20\d\d$/.test(String(x.annee || '')); }
+function comptaAnneesFichier(x){
+  return x.type === 'recap' ? [...new Set(x.periodes.map(p => p.mois.slice(0,4)))].sort() : [];
+}
+function comptaAnnee(i, val){
+  const v = String(val || '').trim();
+  if(v && !/^20\d\d$/.test(v)){ toast('Année invalide : saisissez quatre chiffres, par exemple 2025.', 'bad'); }
+  COMPTA[i].annee = /^20\d\d$/.test(v) ? v : '';
+  render();
+}
+/* Relevé tel qu'il sera importé, une fois l'année appliquée.
+   Relevé du mois : mois choisi + année choisie.
+   Récap : si le fichier ne couvre qu'une année, ses mois sont rattachés à l'année
+   choisie ; s'il en couvre plusieurs, seuls les mois de l'année choisie sont retenus. */
+function comptaEffectif(x){
+  if(x.erreur || !comptaAnneeOk(x)) return null;
+  if(x.type !== 'recap') return {...x, mois: x.annee + '-' + x.moisNum};
+  const ans = comptaAnneesFichier(x);
+  const periodes = ans.length <= 1
+    ? x.periodes.map(p => ({...p, mois: x.annee + p.mois.slice(4), lignes: p.lignes.map(l => ({...l, mois: x.annee + l.mois.slice(4)}))}))
+    : x.periodes.filter(p => p.mois.startsWith(x.annee));
+  const ca = periodes.reduce((t,p)=>t+p.ca,0), achat = periodes.reduce((t,p)=>t+p.achat,0);
+  return {...x, periodes, ca, achat, somme:ca, total:ca,
+    taux: ca > 0 ? (ca-achat)/ca*100 : null,
+    clients: new Set(periodes.flatMap(p => p.lignes.map(l => normKey(l.nom)))).size};
+}
 function comptaRetirer(i){ COMPTA.splice(i,1); render(); }
 function comptaVider(){ COMPTA = []; render(); }
 
 function validerCompta(){
-  const prets = COMPTA.filter(x => !x.erreur && x.lignes.length);
-  if(!prets.length){ toast('Aucun relevé exploitable.', 'bad'); return; }
+  const sansAnnee = COMPTA.filter(x => !x.erreur && x.lignes.length && !comptaAnneeOk(x));
+  if(sansAnnee.length){
+    toast(`Choisissez l'année de ${sansAnnee.length > 1 ? sansAnnee.length + ' relevés' : '« ' + sansAnnee[0].fichier + ' »'} avant d'importer.`, 'bad');
+    return;
+  }
+  const prets = COMPTA.filter(x => !x.erreur && x.lignes.length).map(comptaEffectif)
+    .filter(x => x.type !== 'recap' || x.periodes.length);
+  if(!prets.length){ toast('Aucun relevé exploitable pour l\'année choisie.', 'bad'); return; }
 
   let crees = 0, majs = 0, moisTraites = 0, tauxEcrits = 0;
   const rattache = (nom, com) => {
@@ -3907,16 +3943,19 @@ function validerCompta(){
 }
 
 VIEWS['data:compta'] = () => {
-  const moisChoix = [];
-  for(let i=0;i<24;i++){
-    const d = new Date(); d.setMonth(d.getMonth()-i);
-    moisChoix.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
-  }
+  const moisNoms = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+  const anChoix = [];
+  for(let y = +curYear() + 1; y >= +curYear() - 5; y--) anChoix.push(String(y));
+  const champAnnee = (x,i) => `<input type="number" list="lstAnCompta" min="2000" max="2099" step="1" placeholder="Année"
+      value="${x.annee||''}" onchange="comptaAnnee(${i},this.value)"
+      style="width:110px;${comptaAnneeOk(x)?'':'border-color:var(--bad,#c0392b);outline:1px solid var(--bad,#c0392b)'}">`;
+  const manque = COMPTA.filter(x => !x.erreur && !comptaAnneeOk(x)).length;
   return `
+  <datalist id="lstAnCompta">${anChoix.map(y=>`<option value="${y}">`).join('')}</datalist>
   <div class="card" style="background:linear-gradient(135deg,var(--panel),var(--panel2))">
     <div class="eyebrow">Rituel mensuel</div>
     <h2 style="font-size:23px;margin-bottom:6px">Relevés de la comptabilité</h2>
-    <p class="hint">Un classeur par commercial et par mois, avec le chiffre d'affaires HT par client. Déposez les deux fichiers ensemble : le commercial et le mois sont lus dans le nom du fichier, et restent corrigibles avant validation.</p>
+    <p class="hint">Un classeur par commercial et par mois, avec le chiffre d'affaires HT par client. Déposez les deux fichiers ensemble : le commercial et le mois sont lus dans le nom du fichier et restent corrigibles ; <strong>l'année est à choisir ou saisir pour chaque fichier</strong> avant validation.</p>
   </div>
 
   <div class="card">
@@ -3946,6 +3985,8 @@ VIEWS['data:compta'] = () => {
           <td colspan="7"><span class="tag bad">illisible</span> <span class="hint">${esc(x.erreur)}</span></td>
           <td><button class="btn ghost sm" onclick="comptaRetirer(${i})">Retirer</button></td></tr>`;
         const recap = x.type === 'recap';
+        const e = comptaEffectif(x) || x;
+        const ansF = comptaAnneesFichier(x);
         const okEcart = x.ecart === null || Math.abs(x.ecart) < 0.5;
         return `<tr>
           <td><strong>${esc(x.fichier)}</strong>${x.ignorees?`<div class="hint">${x.ignorees} ligne${x.ignorees>1?'s':''} ignorée${x.ignorees>1?'s':''}</div>`:''}</td>
@@ -3954,13 +3995,17 @@ VIEWS['data:compta'] = () => {
             ${DB.commerciaux.map(c=>`<option value="${c.id}" ${c.id===x.commercial?'selected':''}>${esc(c.nom)}</option>`).join('')}
           </select>${x.detecteCom?'':' <span class="tag warn">à confirmer</span>'}</td>
           <td>${recap
-            ? `<strong>${monthLabel(x.periodes[0].mois)} → ${monthLabel(x.periodes[x.periodes.length-1].mois)}</strong><div class="hint">${x.periodes.length} mois</div>`
-            : `<select onchange="comptaMaj(${i},'mois',this.value)">
-                ${moisChoix.map(m=>`<option value="${m}" ${m===x.mois?'selected':''}>${monthLabel(m)}</option>`).join('')}
-              </select>${x.detecteMois?'':' <span class="tag warn">à confirmer</span>'}`}</td>
-          <td class="num mono">${recap ? x.clients : x.lignes.length}</td>
-          <td class="num mono">${eur(x.total != null ? x.total : x.somme)}</td>
-          <td class="num mono">${recap ? pct(x.taux) : '<span style="color:var(--ink3)">—</span>'}</td>
+            ? `${champAnnee(x,i)}${comptaAnneeOk(x)
+                  ? (e.periodes.length
+                      ? `<div><strong>${monthLabel(e.periodes[0].mois)} → ${monthLabel(e.periodes[e.periodes.length-1].mois)}</strong></div><div class="hint">${e.periodes.length} mois${ansF.length===1 && ansF[0]!==x.annee ? ` · dates du fichier en ${ansF[0]}, rattachées à ${x.annee}` : ''}${ansF.length>1 ? ` · fichier sur ${ansF.join(', ')} : seuls les mois de ${x.annee} sont importés` : ''}</div>`
+                      : `<div><span class="tag bad">aucun mois en ${x.annee}</span></div><div class="hint">Années présentes : ${ansF.join(', ')}</div>`)
+                  : `<div><span class="tag warn">année à choisir</span></div><div class="hint">Dates du fichier : ${ansF.join(', ')||'—'}</div>`}`
+            : `<select style="width:auto;min-width:130px" onchange="comptaMaj(${i},'moisNum',this.value)">
+                ${moisNoms.map((m,k)=>{const v=String(k+1).padStart(2,'0');return `<option value="${v}" ${v===x.moisNum?'selected':''}>${m}</option>`;}).join('')}
+              </select> ${champAnnee(x,i)}${x.detecteMois?'':' <span class="tag warn">mois à confirmer</span>'}${comptaAnneeOk(x)?'':' <span class="tag warn">année à choisir</span>'}`}</td>
+          <td class="num mono">${recap ? e.clients : x.lignes.length}</td>
+          <td class="num mono">${eur(e.total != null ? e.total : e.somme)}</td>
+          <td class="num mono">${recap ? pct(e.taux) : '<span style="color:var(--ink3)">—</span>'}</td>
           <td>${recap
             ? `<span class="tag ok">${x.lues} lignes lues</span>`
             : x.total == null ? `<span class="tag mute">pas de total</span>`
@@ -3970,7 +4015,7 @@ VIEWS['data:compta'] = () => {
         </tr>`;}).join('')}</tbody>
     </table></div>
 
-    ${COMPTA.filter(x=>x.type==='recap').map(x=>`
+    ${COMPTA.filter(x=>x.type==='recap').map(x=>comptaEffectif(x)).filter(x=>x && x.periodes.length).map(x=>`
       <div class="card" style="background:var(--bg2);margin-top:14px">
         <div class="eyebrow">${esc(x.fichier)} · ${esc(whoName(x.commercial))}</div>
         <div class="tw"><table>
@@ -3999,7 +4044,9 @@ VIEWS['data:compta'] = () => {
          <div class="note" style="margin-top:10px">L'import écrira aussi le <strong>taux de marge de chaque client pour chaque mois</strong> dans l'écran Rentabilité, en remplacement des taux que vous y auriez saisis à la main.</div>`
       : ''}
 
-    ${COMPTA.some(x=>!x.erreur && x.type!=='recap' && DB.officiels[x.mois] && DB.officiels[x.mois][x.commercial])
+    ${manque ? `<div class="note warn" style="margin-top:14px"><strong>${manque} relevé${manque>1?'s':''} sans année.</strong> Choisissez l'année dans la liste ou saisissez-la (ex. 2025) pour chaque fichier : l'import reste bloqué tant qu'elle manque.</div>` : ''}
+
+    ${COMPTA.map(comptaEffectif).some(x=>x && x.type!=='recap' && DB.officiels[x.mois] && DB.officiels[x.mois][x.commercial])
       ? `<div class="note warn" style="margin-top:14px">Un chiffre officiel existe déjà pour au moins un de ces mois. L'import le remplacera par le total du relevé ; la marge saisie, elle, est conservée.</div>` : ''}
 
     <div class="note" style="margin-top:14px">L'import écrase le CA du mois pour chaque client concerné plutôt que de l'additionner : réimporter un relevé corrigé ne crée donc pas de double comptage.</div>
