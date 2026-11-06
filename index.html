@@ -345,6 +345,10 @@ tr.tr-eq td{background:#f1f6fc;font-weight:600}
     </div>
     <nav class="spaces" id="spaces"></nav>
     <div class="topbar-right">
+      <div class="who" id="equipeBox" style="display:none">
+        <label for="equipeSel">Équipe</label>
+        <select id="equipeSel" onchange="setEquipe(this.value)"></select>
+      </div>
       <div class="who">
         <label for="yearSel">Exercice</label>
         <select id="yearSel" onchange="setYear(this.value)"></select>
@@ -688,6 +692,12 @@ function renderShell(){
     `<button class="tab ${t.id===TAB?'on':''}" onclick="go('${SPACE}','${t.id}')">${t.label}</button>`
   ).join('');
 
+  const mag = aMagasin();
+  if(!mag && EQUIPE !== 'itinerant') EQUIPE = 'itinerant';
+  document.getElementById('equipeBox').style.display = mag ? '' : 'none';
+  document.getElementById('equipeSel').innerHTML = Object.keys(EQUIPES)
+    .map(k => `<option value="${k}" ${k===EQUIPE?'selected':''}>${EQUIPES[k]}</option>`).join('');
+
   document.getElementById('yearSel').innerHTML = exercices()
     .map(y => `<option value="${y}" ${y===YEAR?'selected':''}>${y}</option>`).join('');
 }
@@ -930,6 +940,7 @@ function stats(com, mk){
   };
 }
 function objMois(com, mk){
+  if(suiviSeul(com)) return {ca:0, marge:0};
   const a = (DB.objectifs.annuel[com]||{})[String(mk).slice(0,4)];
   const douzieme = a ? {ca:(+a.ca||0)/12, marge:(+a.marge||0)/12} : {ca:0, marge:0};
   const m = (DB.objectifs.mensuel[com]||{})[mk];
@@ -937,7 +948,7 @@ function objMois(com, mk){
   /* L'objectif mensuel ne porte que le CA : la marge reste au douzième. */
   return {ca: +m.ca || 0, marge: m.marge != null ? +m.marge : douzieme.marge};
 }
-function objAn(com, y){ return (DB.objectifs.annuel[com]||{})[y||YEAR] || {ca:0,marge:0}; }
+function objAn(com, y){ if(suiviSeul(com)) return {ca:0, marge:0}; return (DB.objectifs.annuel[com]||{})[y||YEAR] || {ca:0,marge:0}; }
 
 /* Cumul d'exercice jusqu'au mois m inclus (1-12) — pour comparer à périmètre égal. */
 function ytd(com, y, m){
@@ -970,7 +981,25 @@ function lastMonths(n){
   }
   return out;
 }
-const ACTIFS = () => DB.commerciaux.filter(c=>c.actif!==false);
+/* ---------- Équipes ----------
+   Itinérants : objectifs + primes. Magasin : suivi seul (ni objectif, ni prime).
+   Le sélecteur d'équipe filtre tout l'affichage ; « Tout GIVEDIS » cumule les deux. */
+const EQUIPES = {itinerant:'Itinérants', magasin:'Magasin', tout:'Tout GIVEDIS'};
+let EQUIPE = (function(){ try{ return localStorage.getItem('gos_equipe') || 'itinerant'; }catch(e){ return 'itinerant'; } })();
+if(!EQUIPES[EQUIPE]) EQUIPE = 'itinerant';
+function equipeDe(c){ return (c && c.equipe === 'magasin') ? 'magasin' : 'itinerant'; }
+function comObj(com){ return typeof com === 'string' ? DB.commerciaux.find(x => x.id === com) : com; }
+function suiviSeul(com){ return equipeDe(comObj(com)) === 'magasin'; }
+function aMagasin(){ return DB.commerciaux.some(c => c.actif !== false && equipeDe(c) === 'magasin'); }
+function setEquipe(e){ EQUIPE = EQUIPES[e] ? e : 'itinerant'; try{ localStorage.setItem('gos_equipe', EQUIPE); }catch(x){} render(); }
+const ACTIFS = () => DB.commerciaux.filter(c => c.actif !== false && (EQUIPE === 'tout' || equipeDe(c) === EQUIPE));
+/* Personnes de l'équipe affichée qui ont des objectifs et des primes. */
+const AVEC_OBJ = () => ACTIFS().filter(c => !suiviSeul(c));
+function noteSuiviSeul(){
+  return `<div class="card"><div class="empty"><div class="big">◎</div>
+    <p><strong>Équipe Magasin : suivi seul.</strong><br>Pas d'objectif ni de prime pour cette équipe. Repassez sur « Itinérants » ou « Tout GIVEDIS » pour cet écran.</p>
+    <button class="btn sm" onclick="setEquipe('itinerant')">Voir les itinérants</button></div></div>`;
+}
 
 /* Première commande d'un client : la plus ancienne visite chiffrée.
    À défaut de montant sur les visites, on retombe sur le CA du mois d'ouverture. */
@@ -1129,6 +1158,8 @@ function renta(com, y){
 
 /* ---------- Moteur de primes ---------- */
 function calcPrime(com, mk){
+  if(suiviSeul(com)) return {st: stats(com, mk), obj:{ca:0, marge:0}, lignes:[], total:0, potentiel:0,
+    gateOk:false, gateVal:0, gateSeuil:0, gateActif:false, suiviSeul:true};
   const st = stats(com, mk);
   const obj = objMois(com, mk);
   const P = DB.primes;
@@ -1272,8 +1303,9 @@ function trajKpi(t){
 }
 const eurSigne = v => (v >= 0 ? '+' : '−') + eur(Math.abs(v));
 function dashObjectifHtml(yN, yP){
-  const coms = ACTIFS();
+  const coms = AVEC_OBJ();
   if(!coms.length) return '';
+  const nomEq = EQUIPE === 'tout' ? 'Itinérants' : 'Équipe';
   const ts = coms.map(c => trajCom(c.id, yN));
   const ks = ts.map(trajKpi), ke = trajKpi(trajFusion(ts, yN));
   const ms = monthsOfYear(yN);
@@ -1335,11 +1367,11 @@ function dashObjectifHtml(yN, yP){
 <div class="card">
   <div class="card-h">
     <div><div class="eyebrow">Objectif ${yN} · ${enCours ? 'au ' + fj(new Date()) : 'exercice ' + (ke.etat==='clos' ? 'clos' : 'à venir')}</div><h3>Trajectoire vers l'objectif annuel</h3></div>
-    ${ke.objAnnuel ? `<span class="tag ${ke.avance>=0?'ok':'bad'}">${eurSigne(ke.avance)} ${ke.avance>=0?"d'avance":'de retard'} · équipe</span>` : ''}
+    ${ke.objAnnuel ? `<span class="tag ${ke.avance>=0?'ok':'bad'}">${eurSigne(ke.avance)} ${ke.avance>=0?"d'avance":'de retard'} · ${nomEq.toLowerCase()}</span>` : ''}
   </div>
   <div class="grid ${coms.length === 2 ? 'g3' : 'g-auto'}" style="align-items:start">
     ${coms.map((c,i) => panneau(c.nom, ks[i], false)).join('')}
-    ${panneau('Équipe', ke, true)}
+    ${panneau(nomEq, ke, true)}
   </div>
   <p class="hint" style="margin-top:12px">Projection : réel sur les mois clos, mois en cours extrapolé à partir des semaines saisies (ou du chiffre officiel), puis moyenne des 3 derniers mois clos pour la suite de l'année.</p>
 </div>
@@ -1348,7 +1380,7 @@ function dashObjectifHtml(yN, yP){
   <div class="card-h"><div><div class="eyebrow">Mois clos ${yN}</div><h3>Rythme et régularité</h3></div><span class="hint">un mois est atteint quand le CA couvre son objectif</span></div>
   <div class="tw"><table>
     <thead><tr><th>Commercial</th><th>Mois atteints</th><th>Meilleur mois</th><th>Moins bon mois</th><th class="num">3 derniers mois</th><th class="num">3 mois précédents</th><th>Tendance</th></tr></thead>
-    <tbody>${coms.map((c,i) => regRow(c.nom, ks[i], false)).join('')}${regRow('Équipe', ke, true)}</tbody>
+    <tbody>${coms.map((c,i) => regRow(c.nom, ks[i], false)).join('')}${regRow(nomEq, ke, true)}</tbody>
   </table></div>
 </div>
 
@@ -1361,7 +1393,7 @@ function dashObjectifHtml(yN, yP){
   <div class="card-h"><div><div class="eyebrow">Comparaison mois par mois</div><h3>Écart avec ${yP}</h3></div></div>
   <div class="tw"><table>
     <thead>
-      <tr><th rowspan="2">Mois</th>${coms.map(c => `<th colspan="2" class="num" style="text-align:center">${esc(c.nom)}</th>`).join('')}<th colspan="2" class="num" style="text-align:center">Équipe</th></tr>
+      <tr><th rowspan="2">Mois</th>${coms.map(c => `<th colspan="2" class="num" style="text-align:center">${esc(c.nom)}</th>`).join('')}<th colspan="2" class="num" style="text-align:center">${nomEq}</th></tr>
       <tr>${coms.concat([{}]).map(() => `<th class="num">CA ${yN}</th><th class="num">Écart vs ${yP}</th>`).join('')}</tr>
     </thead>
     <tbody>${ecartRows || `<tr><td colspan="${coms.length*2+3}" class="hint">Aucun mois à comparer.</td></tr>`}</tbody>
@@ -1372,7 +1404,7 @@ function dashObjectifHtml(yN, yP){
 }
 function dashObjectifChart(){
   const el = document.getElementById('chDashObj'); if(!el) return;
-  const coms = ACTIFS(); if(!coms.length) return;
+  const coms = AVEC_OBJ(); if(!coms.length) return;
   const y = YEAR, yP = String(+y - 1), ms = monthsOfYear(y);
   const t = trajFusion(coms.map(c => trajCom(c.id, y)), y);
   const nbReel = t.etat === 'cours' ? t.idx : t.etat === 'clos' ? 12 : 0;
@@ -1388,6 +1420,109 @@ function dashObjectifChart(){
     {label:'Réalisé ' + yP, data:prec, borderColor:'#8fb6dd', borderDash:[2,3], pointRadius:0, tension:.3}
   ]}, options:{...CHART_BASE, plugins:{...CHART_BASE.plugins, tooltip:{callbacks:{label: c => c.dataset.label + ' : ' + eur(c.parsed.y)}}},
     scales:{...CHART_BASE.scales, y:{...CHART_BASE.scales.y, ticks:{...CHART_BASE.scales.y.ticks, callback: v => (v/1000).toLocaleString('fr-FR') + ' k€'}}}}});
+}
+
+/* ==========================================================================
+Tableau de bord — équipe en suivi seul (Magasin) : pas d'objectif, la référence est l'an passé
+========================================================================== */
+function dashSuiviHtml(yN, yP){
+  const coms = ACTIFS().filter(c => suiviSeul(c));
+  if(!coms.length) return '';
+  const nomEq = 'Magasin';
+  const ts = coms.map(c => trajCom(c.id, yN));
+  const ks = ts.map(trajKpi), ke = trajKpi(trajFusion(ts, yN));
+  const ms = monthsOfYear(yN);
+  const enCours = ke.etat === 'cours';
+  const moisCours = enCours ? monthLabel(ms[ke.idx-1]).split(' ')[0] : '';
+  const fj = d => d.toLocaleDateString('fr-FR',{day:'numeric', month:'long'});
+  const somme = (a, i, j) => a.slice(Math.max(0,i), Math.max(0,j)).reduce((s,v)=>s+v,0);
+  const moy = (a, i, j) => { const n = Math.max(0, j - Math.max(0,i)); return n ? somme(a, i, j) / n : null; };
+  const enrichir = k => {
+    const nc = k.nbClos;
+    const pDate = somme(k.caP, 0, nc) + (enCours ? k.caP[k.idx-1] * new Date().getDate() / joursDuMois(ms[k.idx-1]) : 0);
+    return {...k,
+      closN: somme(k.caM, 0, nc), closP: somme(k.caP, 0, nc),
+      m3: moy(k.caM, nc-3, nc), m3P: moy(k.caP, nc-3, nc), m3Prec: moy(k.caM, nc-6, nc-3),
+      pDate, ecartDate: k.realise - pDate};
+  };
+  const E = ks.map(enrichir), EE = enrichir(ke);
+  const tend = k => {
+    const v = evo(k.m3, k.m3P);
+    if(v === null || k.m3 === null) return '<span class="tag mute">—</span>';
+    return v > 3 ? `<span class="tag ok">▲ en hausse</span>` : v < -3 ? `<span class="tag bad">▼ en baisse</span>` : `<span class="tag mute">■ stable</span>`;
+  };
+  const ligne = (dt, dd, small) => `<div><dt>${dt}</dt><dd>${dd}${small ? `<small>${small}</small>` : ''}</dd></div>`;
+  const panneau = (nom, k, equipe) => {
+    const a = k.totalP ? k.realise / k.totalP * 100 : 0;
+    const rep = k.totalP ? Math.min(100, k.pDate / k.totalP * 100) : 0;
+    const projMois = enCours ? (k.base === 'vide'
+      ? ligne('Projection ' + moisCours, '<span class="tag mute">en attente de saisie</span>', 'estimé au rythme : ' + eur(k.serie[k.idx-1]))
+      : ligne('Projection ' + moisCours, eur(k.proj),
+          (k.caP[k.idx-1] ? evoTag(evo(k.proj, k.caP[k.idx-1])) + ' vs ' + monthLabel(yP + ms[k.idx-1].slice(4)) + ' · ' : '') +
+          (k.base === 'officiel' ? 'chiffre officiel' : k.base === 'mixte' ? 'saisie partielle, complétée au rythme' : k.total ? k.faites + '/' + k.total + ' sem. saisies' : 'extrapolé des semaines saisies'))) : '';
+    return `<div class="traj${equipe ? ' eq' : ''}">
+      <div class="traj-h"><h4>${esc(nom)}</h4>${tend(k)}</div>
+      ${k.totalP ? `<div class="jauge" title="${pct(a)} du CA ${yP} déjà réalisé · au même stade en ${yP} : ${pct(rep)}"><i style="width:${Math.min(100,a)}%"></i><b style="left:${rep}%"></b></div>
+      <div class="hint" style="margin-top:6px">${pct(a)} du CA ${yP} déjà fait · repère : ${pct(rep)} au même stade en ${yP}</div>` : `<div class="note">Aucun chiffre ${yP} pour comparer.</div>`}
+      <dl class="trajl">
+        ${ligne('Réalisé à date', eur(k.realise))}
+        ${k.totalP ? ligne('Même stade ' + yP, eur(k.pDate), `<span style="color:var(--${k.ecartDate>=0?'ok':'bad'})">${eurSigne(k.ecartDate)}</span> ${evoTag(evo(k.realise, k.pDate))}`) : ''}
+        ${k.nbClos ? ligne('Mois clos', eur(k.closN), `janv. → ${monthLabel(ms[k.nbClos-1]).split(' ')[0]} · ${yP} : ${eur(k.closP)} ${evoTag(evo(k.closN, k.closP))}`) : ''}
+        ${k.m3 !== null ? ligne('Moyenne 3 derniers mois', eur(k.m3), `mêmes mois ${yP} : ${k.m3P !== null ? eur(k.m3P) : '—'}${k.m3Prec !== null ? ' · 3 mois avant : ' + eur(k.m3Prec) : ''}`) : ''}
+        ${projMois}
+        ${ligne(k.etat === 'clos' ? 'CA de l\'année' : 'Atterrissage 31 déc.', eur(k.atterrissage), yP + ' : ' + eur(k.totalP) + ' ' + evoTag(evo(k.atterrissage, k.totalP)))}
+        ${equipe ? '' : ligne('Contribution', EE.realise ? pct(k.realise / EE.realise * 100) : '—', 'du CA du magasin')}
+      </dl>
+    </div>`;
+  };
+  const nbM = ke.etat === 'cours' ? ke.idx : ke.etat === 'clos' ? 12 : 0;
+  const ecartCell = (n, p) => `<td class="num mono">${eur(n)}</td><td class="num mono" style="color:var(--${n-p>=0?'ok':'bad'})">${p || n ? eurSigne(n - p) : '—'}<div>${evoTag(evo(n, p))}</div></td>`;
+  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
+    <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
+    ${ks.map(k => ecartCell(k.caM[i], k.caP[i])).join('')}
+    ${ecartCell(ke.caM[i], ke.caP[i])}</tr>`).join('');
+  const sumTo = a => a.slice(0, nbM).reduce((s,v)=>s+v,0);
+  const rowT = (nom, k, eq) => `<tr${eq ? ' class="tr-eq"' : ''}>
+    <td><strong>${esc(nom)}</strong></td>
+    <td class="num mono">${eur(k.closN)}</td>
+    <td class="num mono" style="color:var(--ink3)">${eur(k.closP)}</td>
+    <td>${evoTag(evo(k.closN, k.closP))}</td>
+    <td class="num mono">${k.m3 !== null ? eur(k.m3) : '—'}</td>
+    <td class="num mono" style="color:var(--ink3)">${k.m3P !== null ? eur(k.m3P) : '—'}</td>
+    <td>${tend(k)}</td></tr>`;
+  return `
+<div class="card">
+  <div class="card-h">
+    <div><div class="eyebrow">Magasin · suivi sans objectif · ${enCours ? 'au ' + fj(new Date()) : 'exercice ' + (ke.etat==='clos' ? 'clos' : 'à venir')}</div><h3>Tendance ${yN} face à ${yP}</h3></div>
+    ${EE.totalP ? `<span class="tag ${EE.ecartDate>=0?'ok':'bad'}">${eurSigne(EE.ecartDate)} vs ${yP} au même stade · magasin</span>` : ''}
+  </div>
+  <div class="grid ${coms.length === 2 ? 'g3' : 'g-auto'}" style="align-items:start">
+    ${coms.map((c,i) => panneau(c.nom, E[i], false)).join('')}
+    ${coms.length > 1 ? panneau(nomEq, EE, true) : ''}
+  </div>
+  <p class="hint" style="margin-top:12px">Sans objectif, la référence est l'année ${yP} : repère orange = part du CA ${yP} qui était faite au même stade. Projection : réel sur les mois clos, mois en cours extrapolé, puis moyenne des 3 derniers mois clos.</p>
+</div>
+
+<div class="card">
+  <div class="card-h"><div><div class="eyebrow">Mois clos ${yN} · magasin</div><h3>Rythme face à ${yP}</h3></div><span class="hint">tendance : 3 derniers mois clos comparés aux mêmes mois de ${yP}</span></div>
+  <div class="tw"><table>
+    <thead><tr><th>Vendeur</th><th class="num">Cumul mois clos</th><th class="num">Même période ${yP}</th><th>Évolution</th><th class="num">Moy. 3 derniers mois</th><th class="num">Mêmes mois ${yP}</th><th>Tendance</th></tr></thead>
+    <tbody>${coms.map((c,i) => rowT(c.nom, E[i], false)).join('')}${coms.length > 1 ? rowT(nomEq, EE, true) : ''}</tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <div class="card-h"><div><div class="eyebrow">Magasin · mois par mois</div><h3>Écart avec ${yP}</h3></div></div>
+  <div class="tw"><table>
+    <thead>
+      <tr><th rowspan="2">Mois</th>${coms.map(c => `<th colspan="2" class="num" style="text-align:center">${esc(c.nom)}</th>`).join('')}<th colspan="2" class="num" style="text-align:center">${nomEq}</th></tr>
+      <tr>${coms.concat([{}]).map(() => `<th class="num">CA ${yN}</th><th class="num">Écart vs ${yP}</th>`).join('')}</tr>
+    </thead>
+    <tbody>${ecartRows || `<tr><td colspan="${coms.length*2+3}" class="hint">Aucun mois à comparer.</td></tr>`}</tbody>
+    <tfoot><tr style="border-top:2px solid var(--line2)"><td style="font-weight:600">Cumul</td>
+      ${ks.map(k => ecartCell(sumTo(k.caM), sumTo(k.caP))).join('')}${ecartCell(sumTo(ke.caM), sumTo(ke.caP))}</tr></tfoot>
+  </table></div>
+</div>`;
 }
 
 VIEWS['pilotage:dashboard'] = () => {
@@ -1406,10 +1541,15 @@ VIEWS['pilotage:dashboard'] = () => {
     ca:a.ca+r.n.ca, caP:a.caP+r.pv.ca, marge:a.marge+r.n.marge, margeP:a.margeP+r.pv.marge,
     vis:a.vis+r.n.visites, visP:a.visP+r.pv.visites, nvx:a.nvx+r.n.nouveaux, nvxP:a.nvxP+r.pv.nouveaux
   }),{ca:0,caP:0,marge:0,margeP:0,vis:0,visP:0,nvx:0,nvxP:0});
-  const objAnnuel = ACTIFS().reduce((s,c)=>s+(+objAn(c.id, yN).ca||0),0);
-  const atteinte = tot.obj ? tot.ca/tot.obj*100 : 0;
-  const atteinteAn = objAnnuel ? cum.ca/objAnnuel*100 : 0;
-const trajHtml = dashObjectifHtml(yN, yP);
+  const objAnnuel = AVEC_OBJ().reduce((s,c)=>s+(+objAn(c.id, yN).ca||0),0);
+  /* Atteinte calculée uniquement sur les personnes qui ont un objectif (le magasin n'en a pas). */
+  const rObj = rows.filter(r => !suiviSeul(r.c));
+  const avecObj = rObj.length > 0, mixte = avecObj && rObj.length < rows.length;
+  const caObj = rObj.reduce((s,r)=>s+r.s.ca,0), cumObj = rObj.reduce((s,r)=>s+r.n.ca,0);
+  const atteinte = tot.obj ? caObj/tot.obj*100 : 0;
+  const atteinteAn = objAnnuel ? cumObj/objAnnuel*100 : 0;
+  const clientsActifs = DB.clients.filter(cl => ACTIFS().some(c => c.id === cl.commercial) && caClientMois(cl, mk) > 0).length;
+const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
 
   const moisN = ACTIFS().reduce((s,c)=>s+stats(c.id, mk).ca, 0);
   const moisP = ACTIFS().reduce((s,c)=>s+stats(c.id, yP + mk.slice(4)).ca, 0);
@@ -1428,7 +1568,8 @@ const trajHtml = dashObjectifHtml(yN, yP);
     ca:a.ca+r.n.ca, caP:a.caP+r.pv.ca, marge:a.marge+r.n.marge, margeP:a.margeP+r.pv.marge,
     vis:a.vis+r.n.visites, visP:a.visP+r.pv.visites, nvx:a.nvx+r.n.nouveaux, nvxP:a.nvxP+r.pv.nouveaux
   }),{ca:0,caP:0,marge:0,margeP:0,vis:0,visP:0,nvx:0,nvxP:0});
-  const atteinteCom = totCom.obj ? totCom.ca/totCom.obj*100 : 0;
+  const caObjCom = rowsCom.filter(r => !suiviSeul(r.c)).reduce((s,r)=>s+r.s.ca,0);
+  const atteinteCom = totCom.obj ? caObjCom/totCom.obj*100 : 0;
   const moisOptions = monthsOfYear(yN).map(m => `<option value="${m}" ${m===mkCom?'selected':''}>${monthLabel(m)}</option>`).join('');
 
   const topClientsHtml = ACTIFS().map(c => {
@@ -1457,24 +1598,26 @@ const trajHtml = dashObjectifHtml(yN, yP);
   </div>
 
   <div class="grid g4" style="margin-top:16px">
-    <div class="kpi ${atteinte>=100?'ok':atteinte>=80?'':'bad'}">
+    <div class="kpi ${!avecObj?'':atteinte>=100?'ok':atteinte>=80?'':'bad'}">
       <div class="lab">CA du mois</div><div class="val">${eur(tot.ca)}</div>
-      <div class="sub">objectif ${eur(tot.obj)} · ${pct(atteinte)}</div>
-      <div class="bar"><i class="${atteinte>=100?'ok':atteinte<80?'bad':''}" style="width:${Math.min(100,atteinte)}%"></i></div>
+      ${avecObj ? `<div class="sub">objectif ${mixte?'itinérants ':''}${eur(tot.obj)} · ${pct(atteinte)}${mixte?' · magasin '+eur(tot.ca-caObj):''}</div>
+      <div class="bar"><i class="${atteinte>=100?'ok':atteinte<80?'bad':''}" style="width:${Math.min(100,atteinte)}%"></i></div>` : `<div class="sub">suivi sans objectif</div>`}
       <div class="sub" style="margin-top:7px">${evoTag(evo(moisN, moisP))} vs ${monthLabel(yP + mk.slice(4))}</div>
     </div>
     <div class="kpi info"><div class="lab">Marge</div><div class="val">${eur(tot.marge)}</div>
       <div class="sub">taux ${tot.ca?pct(tot.marge/tot.ca*100):'—'}</div></div>
     <div class="kpi"><div class="lab">Visites</div><div class="val">${tot.vis}</div>
       <div class="sub">${tot.nvx} nouveau${tot.nvx>1?'x':''} client${tot.nvx>1?'s':''}</div></div>
-    <div class="kpi ok"><div class="lab">Primes estimées</div><div class="val">${eur(tot.prime)}</div>
-      <div class="sub">équipe, ${monthLabel(mk)}</div></div>
+    ${avecObj ? `<div class="kpi ok"><div class="lab">Primes estimées</div><div class="val">${eur(tot.prime)}</div>
+      <div class="sub">${mixte?'itinérants':'équipe'}, ${monthLabel(mk)}</div></div>`
+    : `<div class="kpi ok"><div class="lab">Clients actifs</div><div class="val">${num(clientsActifs)}</div>
+      <div class="sub">avec du chiffre en ${monthLabel(mk)}</div></div>`}
   </div>
 
   <div class="card">
     <div class="card-h">
       <div><div class="eyebrow">Cumul janvier → ${monthLabel(mk).split(' ')[0]}</div><h3>Exercice ${yN} comparé à ${yP}</h3></div>
-      ${objAnnuel?`<span class="tag ${atteinteAn>=100?'ok':atteinteAn>=75?'warn':'bad'}">${pct(atteinteAn)} de l'objectif annuel</span>`:''}
+      ${objAnnuel?`<span class="tag ${atteinteAn>=100?'ok':atteinteAn>=75?'warn':'bad'}">${pct(atteinteAn)} de l'objectif annuel${mixte?' · itinérants':''}</span>`:''}
     </div>
     <div class="grid g4">
       <div class="kpi ${(evo(cum.ca,cum.caP)||0)>=0?'ok':'bad'}">
@@ -1499,7 +1642,7 @@ const trajHtml = dashObjectifHtml(yN, yP);
   ${trajHtml}
 <div class="card">
     <div class="card-h">
-      <h3>Par commercial</h3>
+      <h3>${EQUIPE==='magasin'?'Par vendeur':'Par commercial'}</h3>
       <div style="display:flex;align-items:center;gap:10px">
         <select onchange="window.__comMonth=this.value;render();" style="background:var(--panel2);color:var(--ink);border:1px solid var(--line2);border-radius:8px;padding:4px 10px;font-size:13px">${moisOptions}</select>
         <button class="btn sm" onclick="pdfEvolutionCommerciaux()" style="margin-right:2px">Export PDF</button>
@@ -1507,40 +1650,45 @@ const trajHtml = dashObjectifHtml(yN, yP);
       </div>
     </div>
     <div class="tw"><table>
-      <thead><tr><th>Commercial</th><th class="num">CA du mois</th><th class="num">Objectif</th><th>Atteinte</th>
+      <thead><tr><th>${EQUIPE==='magasin'?'Vendeur':'Commercial'}</th><th class="num">CA du mois</th>${avecObj?'<th class="num">Objectif</th><th>Atteinte</th>':`<th class="num">${monthLabel(yP+mkCom.slice(4)).split(' ')[0]} ${yP}</th><th>Évolution</th>`}
         <th class="num">Cumul ${yN}</th><th class="num">Cumul ${yP}</th><th>Évolution</th>
-        <th class="num">Nvx clients</th><th class="num">Prime</th><th>Source</th></tr></thead>
+        <th class="num">Nvx clients</th>${avecObj?'<th class="num">Prime</th>':''}<th>Source</th></tr></thead>
       <tbody>${rowsCom.map(r=>{
         const a = r.o.ca ? r.s.ca/r.o.ca*100 : 0;
+        const ss = suiviSeul(r.c), caMP = stats(r.c.id, yP + mkCom.slice(4)).ca;
         return `<tr>
-          <td><strong>${esc(r.c.nom)}</strong></td>
+          <td><strong>${esc(r.c.nom)}</strong>${ss && mixte ? ' <span class="tag mute">magasin</span>' : ''}</td>
           <td class="num mono">${eur(r.s.ca)}</td>
-          <td class="num mono" style="color:var(--ink3)">${eur(r.o.ca)}</td>
+          ${!avecObj ? `<td class="num mono" style="color:var(--ink3)">${eur(caMP)}</td><td>${evoTag(evo(r.s.ca, caMP))}</td>`
+          : ss ? `<td class="num mono" style="color:var(--ink3)">—</td><td><span class="tag mute">suivi seul</span></td>`
+          : `<td class="num mono" style="color:var(--ink3)">${eur(r.o.ca)}</td>
           <td style="min-width:120px"><span class="tag ${a>=100?'ok':a>=80?'warn':'bad'}">${pct(a)}</span>
-            <div class="bar"><i class="${a>=100?'ok':a<80?'bad':''}" style="width:${Math.min(100,a)}%"></i></div></td>
+            <div class="bar"><i class="${a>=100?'ok':a<80?'bad':''}" style="width:${Math.min(100,a)}%"></i></div></td>`}
           <td class="num mono">${eur(r.n.ca)}</td>
           <td class="num mono" style="color:var(--ink3)">${eur(r.pv.ca)}</td>
           <td>${evoTag(evo(r.n.ca, r.pv.ca))}</td>
           <td class="num mono">${r.n.nouveaux}</td>
-          <td class="num mono" style="color:var(--acc2);font-weight:600">${eur(r.p.total)}</td>
+          ${avecObj ? `<td class="num mono" style="color:var(--acc2);font-weight:600">${ss ? '—' : eur(r.p.total)}</td>` : ''}
           <td><span class="tag ${r.s.officiel?'ok':'mute'}">${r.s.officiel?'officiel':r.s.semaines+' sem.'}</span></td>
         </tr>`;}).join('')}</tbody>
       <tfoot><tr style="border-top:2px solid var(--line2)">
         <td style="font-weight:600">Total</td>
         <td class="num mono" style="font-weight:600">${eur(totCom.ca)}</td>
-        <td class="num mono" style="color:var(--ink3)">${eur(totCom.obj)}</td>
-        <td><span class="tag ${atteinteCom>=100?'ok':atteinteCom>=80?'warn':'bad'}">${pct(atteinteCom)}</span></td>
+        ${avecObj ? `<td class="num mono" style="color:var(--ink3)">${eur(totCom.obj)}</td>
+        <td><span class="tag ${atteinteCom>=100?'ok':atteinteCom>=80?'warn':'bad'}">${pct(atteinteCom)}</span></td>`
+        : (() => { const tP = rowsCom.reduce((s,r)=>s+stats(r.c.id, yP + mkCom.slice(4)).ca,0);
+            return `<td class="num mono" style="color:var(--ink3)">${eur(tP)}</td><td>${evoTag(evo(totCom.ca, tP))}</td>`; })()}
         <td class="num mono" style="font-weight:600">${eur(cumCom.ca)}</td>
         <td class="num mono" style="color:var(--ink3)">${eur(cumCom.caP)}</td>
         <td>${evoTag(evo(cumCom.ca, cumCom.caP))}</td>
         <td class="num mono" style="font-weight:600">${cumCom.nvx}</td>
-        <td class="num mono" style="color:var(--acc2);font-weight:700">${eur(totCom.prime)}</td>
+        ${avecObj ? `<td class="num mono" style="color:var(--acc2);font-weight:700">${eur(totCom.prime)}</td>` : ''}
         <td></td>
       </tr></tfoot></table></div>
   </div>
 
   <div class="card">
-    <div class="card-h"><h3>Top 10 clients par commercial</h3><span class="hint">${monthLabel(mkCom)}</span></div>
+    <div class="card-h"><h3>Top 10 clients par ${EQUIPE==='magasin'?'vendeur':'commercial'}</h3><span class="hint">${monthLabel(mkCom)}</span></div>
     <div class="grid g2" style="align-items:start">${topClientsHtml}</div>
   </div>
 
@@ -1786,13 +1934,14 @@ AFTER['pilotage:graphiques'] = () => {
 
 /* ---------- Objectifs ---------- */
 VIEWS['pilotage:objectifs'] = () => {
+  if(!AVEC_OBJ().length) return noteSuiviSeul();
   const y = YEAR, ms = monthsOfYear(y);
   return `
   <div class="card">
     <div class="card-h"><h3>Objectifs annuels ${y}</h3><button class="btn sm" onclick="saveObjAnnuels()">Enregistrer</button></div>
     <p class="hint" style="margin-bottom:14px">L'objectif annuel est réparti automatiquement par douzièmes, sauf si vous saisissez un objectif mensuel spécifique ci-dessous.</p>
     <div class="grid g2">
-      ${ACTIFS().map(c=>{const a=objAn(c.id);return `
+      ${AVEC_OBJ().map(c=>{const a=objAn(c.id);return `
         <div class="card" style="background:var(--bg2)">
           <div class="eyebrow">${esc(c.nom)}</div>
           <div class="grid g2">
@@ -1806,14 +1955,14 @@ VIEWS['pilotage:objectifs'] = () => {
   <div class="card">
     <div class="card-h"><h3>Objectifs mensuels ${y}</h3><button class="btn sm" onclick="saveObjMensuels()">Enregistrer</button></div>
     <div class="tw"><table>
-      <thead><tr><th>Mois</th>${ACTIFS().map(c=>`<th class="num">${esc(c.nom)} — CA</th>`).join('')}<th class="num">Total</th><th class="num">Réalisé</th><th>Atteinte</th></tr></thead>
+      <thead><tr><th>Mois</th>${AVEC_OBJ().map(c=>`<th class="num">${esc(c.nom)} — CA</th>`).join('')}<th class="num">Total</th><th class="num">Réalisé</th><th>Atteinte</th></tr></thead>
       <tbody>${ms.map(m=>{
-        const tot = ACTIFS().reduce((s,c)=>s+(+objMois(c.id,m).ca||0),0);
-        const real = ACTIFS().reduce((s,c)=>s+stats(c.id,m).ca,0);
+        const tot = AVEC_OBJ().reduce((s,c)=>s+(+objMois(c.id,m).ca||0),0);
+        const real = AVEC_OBJ().reduce((s,c)=>s+stats(c.id,m).ca,0);
         const a = tot?real/tot*100:0;
         return `<tr>
           <td><strong>${monthLabel(m)}</strong></td>
-          ${ACTIFS().map(c=>{const v=(DB.objectifs.mensuel[c.id]||{})[m];
+          ${AVEC_OBJ().map(c=>{const v=(DB.objectifs.mensuel[c.id]||{})[m];
             return `<td class="num"><input type="number" style="text-align:right;padding:6px 8px" id="om_${c.id}_${m}" value="${v&&v.ca?v.ca:''}" placeholder="${Math.round((+objAn(c.id).ca||0)/12)||''}"></td>`;}).join('')}
           <td class="num mono">${eur(tot)}</td>
           <td class="num mono">${eur(real)}</td>
@@ -1822,7 +1971,7 @@ VIEWS['pilotage:objectifs'] = () => {
   </div>`;
 };
 function saveObjAnnuels(){
-  ACTIFS().forEach(c=>{
+  AVEC_OBJ().forEach(c=>{
     const ca = parseFloat(document.getElementById('oa_ca_'+c.id).value)||0;
     const mg = parseFloat(document.getElementById('oa_mg_'+c.id).value)||0;
     DB.objectifs.annuel[c.id] = DB.objectifs.annuel[c.id] || {};
@@ -1833,7 +1982,7 @@ function saveObjAnnuels(){
 function copierObjectifs(){
   const src = String(+YEAR - 1);
   let n = 0;
-  ACTIFS().forEach(c=>{
+  AVEC_OBJ().forEach(c=>{
     const a = (DB.objectifs.annuel[c.id]||{})[src];
     if(!a) return;
     DB.objectifs.annuel[c.id] = DB.objectifs.annuel[c.id] || {};
@@ -1845,7 +1994,7 @@ function copierObjectifs(){
 }
 function saveObjMensuels(){
   const y = YEAR;
-  ACTIFS().forEach(c=>{
+  AVEC_OBJ().forEach(c=>{
     DB.objectifs.mensuel[c.id] = DB.objectifs.mensuel[c.id] || {};
     monthsOfYear(y).forEach(m=>{
       const el = document.getElementById('om_'+c.id+'_'+m);
@@ -2161,8 +2310,9 @@ AFTER['performance:nouveaux'] = () => {
 /* ---------- Primes ---------- */
 let PRIME_MOIS = curMonth();
 VIEWS['performance:primes'] = () => {
+  if(!AVEC_OBJ().length) return noteSuiviSeul();
   const ms = lastMonths(14).reverse();
-  const res = ACTIFS().map(c => ({c, p: calcPrime(c.id, PRIME_MOIS)}));
+  const res = AVEC_OBJ().map(c => ({c, p: calcPrime(c.id, PRIME_MOIS)}));
   const total = res.reduce((s,r)=>s+r.p.total,0);
 
   return `
@@ -2283,7 +2433,7 @@ VIEWS['performance:reglages'] = () => {
         <td class="num">${(c.cibleSource||'fixe')==='fixe'
           ? `<input type="number" id="cr_cib_${i}" value="${c.cible}" style="text-align:right">`
           : `<span class="tag info">automatique</span>
-             <div class="hint" style="margin-top:4px">${ACTIFS().map(x=>esc(x.nom)+' : '+eur(c.cibleSource==='objectifCA'?objMois(x.id,PRIME_MOIS).ca:objMois(x.id,PRIME_MOIS).marge)).join('<br>')}</div>`}</td>
+             <div class="hint" style="margin-top:4px">${AVEC_OBJ().map(x=>esc(x.nom)+' : '+eur(c.cibleSource==='objectifCA'?objMois(x.id,PRIME_MOIS).ca:objMois(x.id,PRIME_MOIS).marge)).join('<br>')}</div>`}</td>
         <td class="num"><input type="number" id="cr_mnt_${i}" value="${c.montant}" style="text-align:right"></td>
         <td><select id="cr_mod_${i}">
           <option value="auto"    ${(c.mode||'auto')==='auto'?'selected':''}>Réglage général</option>
@@ -2366,8 +2516,9 @@ let RENTA_COM = null;
 let RENTA_Q = '';
 
 VIEWS['performance:rentabilite'] = () => {
+  if(!AVEC_OBJ().length) return noteSuiviSeul();
   const r = confRenta();
-  const coms = ACTIFS();
+  const coms = AVEC_OBJ();
   if(!RENTA_COM || !coms.some(c=>c.id===RENTA_COM)) RENTA_COM = coms[0] ? coms[0].id : null;
   if(!RENTA_COM) return `<div class="card">${emptyState('◇','Aucun commercial enregistré.')}</div>`;
 
@@ -2574,7 +2725,7 @@ function saveRenta(){
   r.coutDefaut = parseFloat(document.getElementById('reCout').value) || 0;
   const t = document.getElementById('reTaux').value;
   r.tauxMarge = t === '' ? null : parseFloat(t);
-  ACTIFS().forEach(c => {
+  AVEC_OBJ().forEach(c => {
     const el = document.getElementById('re_' + c.id);
     if(!el) return;
     if(el.value === '') delete r.couts[c.id];
@@ -3245,7 +3396,7 @@ function pdfPrimes(){
   const mk = PRIME_MOIS || curMonth();
   pdfHead(doc, 'Detail des primes — ' + monthLabel(mk), 'Edite le ' + fdate(todayISO()));
   let y = 40;
-  ACTIFS().forEach(c => {
+  AVEC_OBJ().forEach(c => {
     const p = calcPrime(c.id, mk);
     doc.setFontSize(12); doc.setFont(undefined,'bold'); doc.setTextColor(20,25,45);
     doc.text(clean(c.nom) + ' — ' + Math.round(p.total) + ' EUR', 14, y);
@@ -3278,7 +3429,7 @@ function pdfPrimesAnnee(){
   const per = monthLabel(ms[0]) + ' a ' + monthLabel(ms[ms.length-1]);
   const E = v => Math.round(v).toLocaleString('fr-FR').replace(/[\u202f\u00a0]/g,' ') + ' EUR';
   const cr800 = DB.primes.criteres.find(k => k.type==='nvxseuil' && k.actif!==false);
-  const coms = ACTIFS();
+  const coms = AVEC_OBJ();
   const data = coms.map(c => ({c, mois: ms.map(m => ({m, p: calcPrime(c.id, m)}))}));
   const totCom = d => d.mois.reduce((s,x)=>s+x.p.total,0);
 
@@ -3399,11 +3550,15 @@ function wipe(){
 /* ---------- Équipe ---------- */
 VIEWS['data:equipe'] = () => `
   <div class="card">
-    <div class="card-h"><h3>Commerciaux</h3><button class="btn sm" onclick="addCom()">Ajouter</button></div>
+    <div class="card-h"><h3>Commerciaux & vendeurs</h3>
+      <div class="btnrow"><button class="btn sm" onclick="addCom('itinerant')">Ajouter un itinérant</button>
+        <button class="btn sm" onclick="addCom('magasin')">Ajouter au magasin</button></div></div>
+    <p class="hint" style="margin-bottom:12px">Itinérants : objectifs et primes. Magasin : suivi seul (CA, marge, clients, comparaison avec l'an passé), sans objectif ni prime. Pour importer les chiffres d'un vendeur, utilisez « Chiffres compta » comme pour les itinérants et choisissez son nom.</p>
     <div class="tw"><table>
-      <thead><tr><th>Nom</th><th class="num">Clients</th><th class="num">Visites</th><th>Actif</th><th></th></tr></thead>
+      <thead><tr><th>Nom</th><th>Équipe</th><th class="num">Clients</th><th class="num">Visites</th><th>Actif</th><th></th></tr></thead>
       <tbody>${DB.commerciaux.map((c,i)=>`<tr>
         <td><input id="cm_${i}" value="${esc(c.nom)}"></td>
+        <td><select id="cme_${i}"><option value="itinerant" ${equipeDe(c)==='itinerant'?'selected':''}>Itinérants</option><option value="magasin" ${equipeDe(c)==='magasin'?'selected':''}>Magasin (suivi seul)</option></select></td>
         <td class="num mono">${DB.clients.filter(x=>x.commercial===c.id).length}</td>
         <td class="num mono">${DB.visites.filter(x=>x.commercial===c.id).length}</td>
         <td><select id="cma_${i}"><option value="1" ${c.actif!==false?'selected':''}>Oui</option><option value="0" ${c.actif===false?'selected':''}>Non</option></select></td>
@@ -3411,9 +3566,12 @@ VIEWS['data:equipe'] = () => `
       </tr>`).join('')}</tbody></table></div>
     <div class="btnrow" style="margin-top:14px"><button class="btn" onclick="saveComs()">Enregistrer</button></div>
   </div>`;
-function addCom(){
-  const n = prompt('Nom du commercial ?'); if(!n) return;
-  DB.commerciaux.push({id: normKey(n).replace(/ /g,'_')||uid(), nom:n.trim(), actif:true});
+function addCom(equipe){
+  const mag = equipe === 'magasin';
+  const n = prompt(mag ? 'Nom du vendeur magasin ?' : 'Nom du commercial ?'); if(!n) return;
+  let id = normKey(n).replace(/ /g,'_') || uid();
+  if(DB.commerciaux.some(c => c.id === id)){ toast('Ce nom existe déjà dans l\'équipe', 'bad'); return; }
+  DB.commerciaux.push({id, nom:n.trim(), actif:true, equipe: mag ? 'magasin' : 'itinerant'});
   save(); render();
 }
 function saveComs(){
@@ -3421,6 +3579,7 @@ function saveComs(){
     const el = document.getElementById('cm_'+i); if(!el) return;
     c.nom = el.value.trim() || c.nom;
     c.actif = document.getElementById('cma_'+i).value === '1';
+    const e = document.getElementById('cme_'+i); if(e) c.equipe = e.value;
   });
   save(); toast('Équipe enregistrée','ok'); render();
 }

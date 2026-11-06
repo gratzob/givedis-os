@@ -411,7 +411,8 @@
     let prime = null; try{ prime = calcPrime(com, mk); }catch(e){}
     let nvx = []; try{ nvx = nouveauxDuMois(com, mk); }catch(e){}
     const synth = synthese({s, o, sPrev, sN1, cum, cum1, oa, a, vis, nvx});
-    return {com, nom:whoName(com), mk, s, o, sPrev, sN1, cum, cum1, oa, vis, parType, parRes, Md, a, top, prime, nvx, synth};
+    const so = (typeof suiviSeul === 'function' && suiviSeul(com));
+    return {com, nom:whoName(com), mk, s, o, sPrev, sN1, cum, cum1, oa, vis, parType, parRes, Md, a, top, prime: so ? null : prime, nvx, synth, so};
   }
 
   function synthese(d){
@@ -443,8 +444,9 @@
       <div class="card-h"><div><div class="eyebrow">Compte rendu · ${monthLabel(d.mk)}</div><h2 style="margin:2px 0">${esc(d.nom)}</h2></div>
         <button class="btn sm" onclick="crPDF('${d.com}')">⬇ PDF ${esc(d.nom)}</button></div>
       <div class="grid g4">
-        <div class="kpi ${att>=100?'ok':'bad'}"><div class="lab">CA du mois</div><div class="val">${eur(d.s.ca)}</div><div class="sub">objectif ${eur(d.o.ca)} · ${pct(att)}</div>
-          <div class="bar"><i class="${att>=100?'ok':'bad'}" style="width:${Math.min(100,att)}%"></i></div></div>
+        ${d.so ? `<div class="kpi"><div class="lab">CA du mois</div><div class="val">${eur(d.s.ca)}</div><div class="sub">magasin · suivi sans objectif</div></div>`
+        : `<div class="kpi ${att>=100?'ok':'bad'}"><div class="lab">CA du mois</div><div class="val">${eur(d.s.ca)}</div><div class="sub">objectif ${eur(d.o.ca)} · ${pct(att)}</div>
+          <div class="bar"><i class="${att>=100?'ok':'bad'}" style="width:${Math.min(100,att)}%"></i></div></div>`}
         <div class="kpi info"><div class="lab">Marge</div><div class="val">${eur(d.s.marge)}</div><div class="sub">taux ${pct(d.s.txmarge)}</div></div>
         <div class="kpi"><div class="lab">Évolution</div><div class="val" style="font-size:20px">${vN1===null?'—':sgn(vN1)+pct(vN1)}</div><div class="sub">vs ${monthLabel(addM(d.mk,-12))} · ${vM1===null?'—':sgn(vM1)+pct(vM1)} vs mois préc.</div></div>
         <div class="kpi"><div class="lab">Cumul ${d.mk.slice(0,4)}</div><div class="val" style="font-size:20px">${eur(d.cum.ca)}</div><div class="sub">${vC===null?'':sgn(vC)+pct(vC)+' vs N-1 · '}${d.oa.ca?pct(d.cum.ca/d.oa.ca*100)+' obj. annuel':''}</div></div>
@@ -473,11 +475,12 @@
   }
 
   VIEWS['pilotage:compterendu'] = () => {
+    if(AN.crCom && !ACTIFS().some(c => c.id === AN.crCom)) AN.crCom = '';
     const mk = crMois();
-    const coms = DB.commerciaux.filter(c => c.actif !== false && (!AN.crCom || c.id === AN.crCom));
+    const coms = ACTIFS().filter(c => !AN.crCom || c.id === AN.crCom);
     const datas = coms.map(c => crData(c.id, mk));
     window.__CR_LAST = {mk, datas};
-    const tot = {ca:sum(datas.map(d=>d.s.ca)), obj:sum(datas.map(d=>d.o.ca)), marge:sum(datas.map(d=>d.s.marge)), vis:sum(datas.map(d=>d.vis.length))};
+    const tot = {ca:sum(datas.map(d=>d.s.ca)), caO:sum(datas.filter(d=>!d.so).map(d=>d.s.ca)), obj:sum(datas.map(d=>d.o.ca)), marge:sum(datas.map(d=>d.s.marge)), vis:sum(datas.map(d=>d.vis.length))};
     return `
     <div class="card" style="background:linear-gradient(135deg,var(--panel),var(--panel2))">
       <div class="card-h" style="flex-wrap:wrap;gap:10px"><div>
@@ -487,13 +490,13 @@
         <div class="btnrow" style="gap:8px;flex-wrap:wrap;align-items:center">
           <select style="width:auto" onchange="anSet('crMk',this.value)">${monthsOfYear(YEAR).filter(m => m <= dashMonth()).reverse().map(m => `<option value="${m}" ${m===mk?'selected':''}>${monthLabel(m)}</option>`).join('')}</select>
           <select style="width:auto" onchange="anSet('crCom',this.value)"><option value="">Toute l'équipe</option>
-            ${DB.commerciaux.map(c => `<option value="${c.id}" ${AN.crCom===c.id?'selected':''}>${esc(c.nom)}</option>`).join('')}</select>
+            ${ACTIFS().map(c => `<option value="${c.id}" ${AN.crCom===c.id?'selected':''}>${esc(c.nom)}</option>`).join('')}</select>
           <label class="hint" style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" style="width:auto" ${AN.crPrime?'checked':''} onchange="anSet('crPrime',this.checked)"> Inclure les primes</label>
           <button class="btn" onclick="crPDF()">⬇ Exporter ${AN.crCom ? 'le PDF' : 'le PDF équipe'}</button>
         </div></div>
     </div>
     ${!AN.crCom && datas.length > 1 ? `<div class="grid g4" style="margin-top:16px">
-      <div class="kpi ${tot.ca>=tot.obj?'ok':'bad'}"><div class="lab">CA équipe</div><div class="val">${eur(tot.ca)}</div><div class="sub">objectif ${eur(tot.obj)} · ${pct(tot.obj?tot.ca/tot.obj*100:0)}</div></div>
+      <div class="kpi ${!tot.obj?'':tot.caO>=tot.obj?'ok':'bad'}"><div class="lab">CA équipe</div><div class="val">${eur(tot.ca)}</div><div class="sub">${tot.obj ? `objectif${tot.caO!==tot.ca?' itinérants':''} ${eur(tot.obj)} · ${pct(tot.caO/tot.obj*100)}${tot.caO!==tot.ca?' · magasin '+eur(tot.ca-tot.caO):''}` : 'suivi sans objectif'}</div></div>
       <div class="kpi info"><div class="lab">Marge équipe</div><div class="val">${eur(tot.marge)}</div><div class="sub">taux ${pct(tot.ca?tot.marge/tot.ca*100:0)}</div></div>
       <div class="kpi"><div class="lab">Visites</div><div class="val">${tot.vis}</div></div>
       <div class="kpi"><div class="lab">Nouveaux clients</div><div class="val">${sum(datas.map(d=>d.nvx.length))}</div></div>
@@ -545,19 +548,20 @@
     pdfHead(doc, 'Compte rendu mensuel - ' + monthLabel(d.mk), d.nom + ' - edite le ' + fdate(todayISO()));
     const att = d.o.ca ? d.s.ca / d.o.ca * 100 : 0;
     let y = pdfKpis(doc, 40, [
-      {l:'CA du mois', v:P.eur(d.s.ca), s:'obj. ' + P.eur(d.o.ca) + ' - ' + P.pct(att), c: att >= 100 ? 'ok' : 'bad'},
+      d.so ? {l:'CA du mois', v:P.eur(d.s.ca), s:'magasin - suivi sans objectif'}
+           : {l:'CA du mois', v:P.eur(d.s.ca), s:'obj. ' + P.eur(d.o.ca) + ' - ' + P.pct(att), c: att >= 100 ? 'ok' : 'bad'},
       {l:'Marge', v:P.eur(d.s.marge), s:'taux ' + P.pct(d.s.txmarge)},
       {l:'Visites', v:String(d.vis.length), s:d.nvx.length + ' nouveau(x) client(s)'},
       {l:'Cumul ' + d.mk.slice(0,4), v:P.eur(d.cum.ca), s: d.oa.ca ? P.pct(d.cum.ca/d.oa.ca*100) + ' obj. annuel' : ''}
     ]);
     y = pdfBloc(doc, y, 'Indicateurs');
     doc.autoTable({startY:y, head:[['Indicateur','Valeur','Comparaison']], body:[
-      ['CA du mois', P.eur(d.s.ca), 'objectif ' + P.eur(d.o.ca) + ' (' + P.pct(att) + ')'],
+      ['CA du mois', P.eur(d.s.ca), d.so ? 'suivi sans objectif' : 'objectif ' + P.eur(d.o.ca) + ' (' + P.pct(att) + ')'],
       ['vs mois precedent', P.eur(d.sPrev.ca), P.v(varPct(d.s.ca, d.sPrev.ca))],
       ['vs meme mois N-1', P.eur(d.sN1.ca), P.v(varPct(d.s.ca, d.sN1.ca))],
       ['Marge / taux', P.eur(d.s.marge), P.pct(d.s.txmarge)],
       ['Cumul depuis janvier', P.eur(d.cum.ca), 'N-1 : ' + P.eur(d.cum1.ca) + ' (' + P.v(varPct(d.cum.ca, d.cum1.ca)) + ')'],
-      ['Objectif annuel', P.eur(d.oa.ca), d.oa.ca ? P.pct(d.cum.ca/d.oa.ca*100) + ' realise' : '-'],
+      ...(d.so ? [] : [['Objectif annuel', P.eur(d.oa.ca), d.oa.ca ? P.pct(d.cum.ca/d.oa.ca*100) + ' realise' : '-']]),
       ['Visites', String(d.vis.length), T(Object.entries(d.parType).map(([k,v]) => k + ' ' + v).join(', ') || '-')],
       ['Resultats des visites', '', T(Object.entries(d.parRes).map(([k,v]) => k + ' ' + v).join(', ') || '-')],
       ['Nouveaux clients', String(d.nvx.length), T(d.nvx.slice(0,6).map(c => c.nom).join(', '))]
@@ -604,22 +608,23 @@
     if(!window.jspdf){ toast('Bibliothèque PDF non chargée', 'bad'); return; }
     const {jsPDF} = window.jspdf; const doc = new jsPDF();
     const mk = crMois();
-    const coms = seul ? [seul] : DB.commerciaux.filter(c => c.actif !== false && (!AN.crCom || c.id === AN.crCom)).map(c => c.id);
+    const coms = seul ? [seul] : ACTIFS().filter(c => !AN.crCom || c.id === AN.crCom).map(c => c.id);
     const datas = coms.map(c => crData(c, mk));
     let premier = true;
     if(datas.length > 1){
       pdfHead(doc, 'Compte rendu mensuel equipe - ' + monthLabel(mk), 'Edite le ' + fdate(todayISO()));
-      const t = {ca:sum(datas.map(d=>d.s.ca)), obj:sum(datas.map(d=>d.o.ca)), marge:sum(datas.map(d=>d.s.marge)),
+      const t = {ca:sum(datas.map(d=>d.s.ca)), caO:sum(datas.filter(d=>!d.so).map(d=>d.s.ca)), cumO:sum(datas.filter(d=>!d.so).map(d=>d.cum.ca)), obj:sum(datas.map(d=>d.o.ca)), marge:sum(datas.map(d=>d.s.marge)),
         n1:sum(datas.map(d=>d.sN1.ca)), cum:sum(datas.map(d=>d.cum.ca)), cum1:sum(datas.map(d=>d.cum1.ca)), oa:sum(datas.map(d=>d.oa.ca))};
       let y = pdfKpis(doc, 40, [
-        {l:'CA equipe', v:P.eur(t.ca), s:'obj. ' + P.eur(t.obj) + ' - ' + P.pct(t.obj ? t.ca/t.obj*100 : 0), c: t.ca >= t.obj ? 'ok' : 'bad'},
+        t.obj ? {l:'CA equipe', v:P.eur(t.ca), s:'obj.' + (t.caO !== t.ca ? ' itin. ' : ' ') + P.eur(t.obj) + ' - ' + P.pct(t.caO/t.obj*100), c: t.caO >= t.obj ? 'ok' : 'bad'}
+              : {l:'CA equipe', v:P.eur(t.ca), s:'suivi sans objectif'},
         {l:'Marge', v:P.eur(t.marge), s:'taux ' + P.pct(t.ca ? t.marge/t.ca*100 : 0)},
         {l:'vs N-1', v:P.v(varPct(t.ca, t.n1)), s:'mois de ' + monthLabel(addM(mk,-12))},
-        {l:'Cumul', v:P.eur(t.cum), s:P.v(varPct(t.cum, t.cum1)) + ' vs N-1' + (t.oa ? ' - ' + P.pct(t.cum/t.oa*100) + ' obj.' : '')}
+        {l:'Cumul', v:P.eur(t.cum), s:P.v(varPct(t.cum, t.cum1)) + ' vs N-1' + (t.oa ? ' - ' + P.pct(t.cumO/t.oa*100) + ' obj.' : '')}
       ]);
       y = pdfBloc(doc, y, 'Par commercial');
       doc.autoTable({startY:y, head:[['Commercial','CA mois','Objectif','Atteinte','vs N-1','Marge','Cumul','Evol. cumul','Visites','Nvx']],
-        body: datas.map(d => [T(d.nom), P.eur(d.s.ca), P.eur(d.o.ca), P.pct(d.o.ca ? d.s.ca/d.o.ca*100 : 0), P.v(varPct(d.s.ca, d.sN1.ca)),
+        body: datas.map(d => [T(d.nom), P.eur(d.s.ca), d.so ? '-' : P.eur(d.o.ca), d.so ? 'suivi' : P.pct(d.o.ca ? d.s.ca/d.o.ca*100 : 0), P.v(varPct(d.s.ca, d.sN1.ca)),
           P.pct(d.s.txmarge), P.eur(d.cum.ca), P.v(varPct(d.cum.ca, d.cum1.ca)), String(d.vis.length), String(d.nvx.length)]),
         ...TBL, styles:{fontSize:7.8, cellPadding:2}});
       y = doc.lastAutoTable.finalY + 8;
