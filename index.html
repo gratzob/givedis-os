@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b1220">
+<meta name="theme-color" content="#1f5a96">
 <title>GIVEDIS OS — Pilotage commercial</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,13 +18,14 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 :root{
-  --bg:#060c18; --bg2:#0b1424; --panel:#101c31; --panel2:#16253f;
-  --line:#1f3352; --line2:#2c4569;
-  --ink:#e6eefc; --ink2:#9fb2d4; --ink3:#6a7fa5;
-  --acc:#4d9bff; --acc2:#8cc2ff; --acc-dim:rgba(77,155,255,.14); --acc-deep:#1e5fb8;
-  --ok:#2fbf71; --warn:#f0a13b; --bad:#e0576a; --info:#22c6d8;
-  --r:14px; --r2:10px;
-  --shadow:0 10px 30px rgba(0,0,0,.4);
+  --bg:#eaeff5; --bg2:#f4f7fb; --panel:#ffffff; --panel2:#eef3f9;
+  --line:#d6dee9; --line2:#b7c4d5;
+  --ink:#10243f; --ink2:#3b5170; --ink3:#6b7c95;
+  --acc:#1f5a96; --acc2:#2b6cb0; --acc-dim:rgba(31,90,150,.12); --acc-deep:#163f6b;
+  --ok:#1e9455; --warn:#e08a1e; --bad:#c7364a; --info:#2a8bc4;
+  --steel:#c9d3df; --steel2:#a9b6c6;
+  --r:12px; --r2:9px;
+  --shadow:0 1px 2px rgba(16,36,63,.06), 0 8px 22px rgba(16,36,63,.07);
   --maxw:1400px;
 }
 *{box-sizing:border-box}
@@ -231,6 +232,104 @@ tfoot td.fige{background:var(--panel)}
   .space-btn{padding:7px 11px;font-size:13.5px}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ==========================================================================
+   Thème GIVEDIS — bleu et blanc du logo, ambiance quincaillerie
+   (panneau perforé, plaques rivetées, métal brossé, réglet gradué)
+   ========================================================================== */
+body{
+  background:
+    radial-gradient(circle at 11px 11px, rgba(31,90,150,.11) 1.6px, transparent 2.2px) 0 0/22px 22px,
+    linear-gradient(180deg,#f3f6fa 0,#e6ecf3 100%) fixed;
+}
+.topbar{
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg,#2565a6 0%,#1f5a96 55%,#184a7d 100%);
+  backdrop-filter:none;border-bottom:3px solid #123a63;
+  box-shadow:0 2px 0 rgba(255,255,255,.6) inset, 0 6px 18px rgba(16,36,63,.18);
+}
+.brand.haslogo .mark{box-shadow:0 2px 8px rgba(0,0,0,.25), inset 0 0 0 1px rgba(16,36,63,.08)}
+.brand .nm{color:#fff}
+.brand .sub{color:rgba(255,255,255,.72)}
+.spaces{background:rgba(9,30,56,.28);border-color:rgba(255,255,255,.18)}
+.space-btn{color:rgba(255,255,255,.72)}
+.space-btn:hover{color:#fff}
+.space-btn.on{background:#fff;color:var(--acc);box-shadow:0 2px 6px rgba(0,0,0,.18)}
+.topbar .who{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.25)}
+.topbar .who label{color:rgba(255,255,255,.75)}
+.topbar .who select{color:#fff}
+.topbar .who select option{color:var(--ink);background:#fff}
+.topbar .btn.ghost{color:#fff;border-color:rgba(255,255,255,.45);background:transparent}
+.topbar .btn.ghost:hover{background:rgba(255,255,255,.14);color:#fff}
+
+.tabsbar{background:#fff;border-bottom:1px solid var(--line);position:relative;box-shadow:0 1px 0 rgba(16,36,63,.04)}
+.tabsbar::after{content:'';position:absolute;left:0;right:0;bottom:0;height:5px;pointer-events:none;
+  background:repeating-linear-gradient(90deg, rgba(31,90,150,.32) 0 1px, transparent 1px 8px),
+             repeating-linear-gradient(90deg, rgba(31,90,150,.5) 0 1px, transparent 1px 40px);
+  background-size:auto 3px, auto 5px;background-repeat:repeat-x;background-position:bottom left}
+.tab{color:var(--ink3);font-weight:600}
+.tab:hover{color:var(--acc)}
+.tab.on{color:var(--acc);border-bottom:3px solid var(--acc)}
+
+.card{
+  background:
+    radial-gradient(circle at 10px 10px, #c3cedb 2px, #eef2f7 2.4px, transparent 3.2px),
+    radial-gradient(circle at calc(100% - 10px) 10px, #c3cedb 2px, #eef2f7 2.4px, transparent 3.2px),
+    radial-gradient(circle at 10px calc(100% - 10px), #c3cedb 2px, #eef2f7 2.4px, transparent 3.2px),
+    radial-gradient(circle at calc(100% - 10px) calc(100% - 10px), #c3cedb 2px, #eef2f7 2.4px, transparent 3.2px),
+    var(--panel);
+  border:1px solid var(--line);border-top:3px solid var(--acc);
+}
+.card-h h3{font-size:19px;text-transform:uppercase;letter-spacing:.05em;color:var(--acc-deep)}
+.eyebrow{color:var(--acc2)}
+.kpi{background:linear-gradient(180deg,#fff,#f6f9fc);border:1px solid var(--line);box-shadow:0 1px 0 #fff inset, 0 2px 6px rgba(16,36,63,.05)}
+.kpi::after{width:4px;opacity:1}
+.kpi .lab{color:var(--ink3)}
+.kpi .val{color:var(--ink)}
+.bar{background:#e2e9f1;box-shadow:inset 0 1px 2px rgba(16,36,63,.08)}
+.bar i{background:linear-gradient(90deg,var(--acc-deep),var(--acc))}
+.bar i.ok{background:linear-gradient(90deg,#167a45,var(--ok))}
+.bar i.bad{background:linear-gradient(90deg,#9e2a3a,var(--bad))}
+
+.btn{color:#fff;box-shadow:0 1px 0 rgba(255,255,255,.25) inset, 0 2px 5px rgba(16,36,63,.18)}
+.btn:hover{background:var(--acc-deep);color:#fff}
+.btn.ghost{background:#fff;color:var(--acc);border:1px solid var(--line2);box-shadow:none}
+.btn.ghost:hover{background:var(--panel2);color:var(--acc-deep)}
+.chip{background:#fff}
+.chip.on{color:#fff}
+input,select,textarea{background:#fff;border-color:var(--line2)}
+
+.tag.ok{background:rgba(30,148,85,.12);color:#16743f}
+.tag.warn{background:rgba(224,138,30,.15);color:#a8620c}
+.tag.bad{background:rgba(199,54,74,.11);color:#a92a3c}
+.tag.info{background:rgba(42,139,196,.12);color:#1f6f9f}
+.tag.mute{background:#e9eef4;color:var(--ink3)}
+
+th{background:#f1f5fa;color:var(--acc-deep);border-bottom:2px solid var(--line2)}
+tbody tr:hover{background:#f5f8fc}
+th.fige,td.fige,tfoot td.fige{background:#fff}
+tbody tr:hover td.fige{background:#f5f8fc}
+.note{background:rgba(42,139,196,.07)}
+.modal{background:rgba(16,36,63,.45)}
+.toast{background:#fff}
+
+/* Trajectoire vers l'objectif */
+.traj{background:linear-gradient(180deg,#fff,#f7f9fc);border:1px solid var(--line);border-radius:var(--r2);padding:14px 14px 6px;box-shadow:0 2px 6px rgba(16,36,63,.05)}
+.traj.eq{background:linear-gradient(180deg,#f1f6fc,#e8f0f9);border-color:var(--line2)}
+.traj-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.traj-h h4{font-size:18px;text-transform:uppercase;letter-spacing:.05em;color:var(--acc-deep)}
+.jauge{position:relative;height:16px;border-radius:4px;border:1px solid var(--line2);
+  background:repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), rgba(16,36,63,.18) calc(10% - 1px) 10%), #e6ecf3}
+.jauge i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--acc-deep),var(--acc),#3f86cf);transition:width .5s}
+.jauge b{position:absolute;top:-5px;bottom:-5px;width:4px;margin-left:-2px;border-radius:2px;background:var(--warn);box-shadow:0 0 0 2px #fff}
+.trajl{margin:10px 0 0}
+.trajl>div{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:7px 0;border-bottom:1px dashed var(--line)}
+.trajl>div:last-child{border-bottom:0}
+.trajl dt{font-size:12.5px;color:var(--ink3);padding-top:1px}
+.trajl dd{margin:0;text-align:right;font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:600;font-variant-numeric:tabular-nums}
+.trajl dd small{display:block;margin-top:2px;font-family:'Instrument Sans',sans-serif;font-size:11.5px;font-weight:500;color:var(--ink3)}
+tr.tr-eq td{background:#f1f6fc;font-weight:600}
 </style>
 </head>
 <body>
@@ -1084,6 +1183,213 @@ function fmtCrit(c, v){
 /* ==========================================================================
    PILOTAGE
    ========================================================================== */
+/* ==========================================================================
+Tableau de bord — trajectoire vers l'objectif annuel (CA uniquement)
+========================================================================== */
+function joursDuMois(mk){ const [y,m] = String(mk).split('-').map(Number); return new Date(y, m, 0).getDate(); }
+/* Projection du mois en cours : chiffre officiel s'il existe, sinon semaines saisies extrapolées au mois entier. */
+function projectionMois(com, mk){
+  const s = stats(com, mk);
+  if(s.officiel) return {proj:s.ca, base:'officiel', faites:0, total:0};
+  const total = weeksOfMonth(mk).length;
+  const faites = semainesOf(com, mk).length;
+  if(!faites || !total) return {proj:null, base:'vide', faites:0, total};
+  return {proj: s.caSaisi / Math.min(faites, total) * total, base:'semaines', faites, total};
+}
+/* Série mensuelle d'un commercial : réel sur les mois clos, projection sur le mois en cours, rythme des 3 derniers mois ensuite. */
+function trajCom(com, y){
+  const ms = monthsOfYear(y);
+  const cy = curYear();
+  const etat = y === cy ? 'cours' : (y < cy ? 'clos' : 'futur');
+  const idx = etat === 'cours' ? +curMonth().slice(5,7) : (etat === 'clos' ? 12 : 0);
+  const nbClos = etat === 'cours' ? idx - 1 : idx;
+  const caM = ms.map(m => stats(com, m).ca);
+  const obM = ms.map(m => +objMois(com, m).ca || 0);
+  const caP = monthsOfYear(String(+y - 1)).map(m => stats(com, m).ca);
+  const der3 = caM.slice(Math.max(0, nbClos - 3), nbClos);
+  const rythme = der3.length ? der3.reduce((s,v)=>s+v,0) / der3.length : 0;
+  let proj = null, base = null, faites = 0, total = 0;
+  if(etat === 'cours'){ const p = projectionMois(com, ms[idx-1]); proj = p.proj; base = p.base; faites = p.faites; total = p.total; }
+  const serie = ms.map((m,i) => {
+    if(i < nbClos) return caM[i];
+    if(etat === 'futur') return 0;
+    if(i === idx - 1) return Math.max(proj !== null ? proj : rythme, caM[i]);
+    return rythme;
+  });
+  return {y, etat, idx, nbClos, caM, obM, caP, serie, proj, base, faites, total, rythme, objAn: +objAn(com, y).ca || 0};
+}
+function trajFusion(list, y){
+  const t0 = list[0];
+  const sum = k => t0[k].map((_,i) => list.reduce((s,t)=>s+t[k][i],0));
+  const bases = list.map(t => t.base);
+  return {y, etat:t0.etat, idx:t0.idx, nbClos:t0.nbClos,
+    caM:sum('caM'), obM:sum('obM'), caP:sum('caP'), serie:sum('serie'),
+    proj: t0.etat === 'cours' ? sum('serie')[t0.idx-1] : null,
+    base: bases.every(b=>b==='vide') ? 'vide' : bases.every(b=>b==='officiel') ? 'officiel' : bases.some(b=>b==='vide') ? 'mixte' : 'semaines',
+    faites:0, total:0,
+    rythme: list.reduce((s,t)=>s+t.rythme,0),
+    objAn: list.reduce((s,t)=>s+t.objAn,0)};
+}
+function trajKpi(t){
+  const ms = monthsOfYear(t.y);
+  const objAnnuel = t.objAn || t.obM.reduce((s,v)=>s+v,0);
+  const cumClos = t.caM.slice(0, t.nbClos).reduce((s,v)=>s+v,0);
+  const caCours = t.etat === 'cours' ? t.caM[t.idx-1] : 0;
+  const realise = cumClos + caCours;
+  let objDate = t.obM.slice(0, t.nbClos).reduce((s,v)=>s+v,0);
+  if(t.etat === 'cours') objDate += t.obM[t.idx-1] * new Date().getDate() / joursDuMois(ms[t.idx-1]);
+  const moisRestants = t.etat === 'cours' ? 12 - t.idx + 1 : (t.etat === 'futur' ? 12 : 0);
+  const besoin = moisRestants ? Math.max(0, objAnnuel - cumClos) / moisRestants : 0;
+  const atterrissage = t.serie.reduce((s,v)=>s+v,0);
+  const totalP = t.caP.reduce((s,v)=>s+v,0);
+  /* Date d'atteinte : sur le réel si l'objectif est déjà passé, sinon sur la projection. */
+  const deja = objAnnuel > 0 && realise >= objAnnuel;
+  const src = deja ? t.caM : t.serie;
+  let date = null, cum = 0;
+  if(objAnnuel > 0) for(let i=0;i<12;i++){
+    const v = src[i], prev = cum; cum += v;
+    if(cum >= objAnnuel && v > 0){
+      const nbj = joursDuMois(ms[i]);
+      let j;
+      /* Mois en cours : le reste projeté se répartit sur les jours qui restent, pas depuis le 1er. */
+      if(!deja && t.etat === 'cours' && i === t.idx - 1){
+        const auj = new Date().getDate(), dejaMois = t.caM[i], resteMois = v - dejaMois;
+        j = (prev + dejaMois >= objAnnuel || resteMois <= 0) ? auj : auj + Math.ceil((objAnnuel - prev - dejaMois) / resteMois * (nbj - auj));
+      } else j = Math.ceil((objAnnuel - prev) / v * nbj);
+      j = Math.min(nbj, Math.max(1, j));
+      date = new Date(+t.y, i, j); break;
+    }
+  }
+  const clos = ms.slice(0, t.nbClos).map((m,i)=>({m, ca:t.caM[i], obj:t.obM[i], taux: t.obM[i] ? t.caM[i]/t.obM[i]*100 : null})).filter(x => x.taux !== null);
+  const tri = clos.slice().sort((a,b)=>b.taux-a.taux);
+  const tx = a => { const o = a.reduce((s,x)=>s+x.obj,0); return o ? a.reduce((s,x)=>s+x.ca,0)/o*100 : null; };
+  const moy = a => a.length ? a.reduce((s,x)=>s+x.ca,0)/a.length : null;
+  return {...t, objAnnuel, cumClos, caCours, realise, objDate, avance: realise - objDate,
+    reste: Math.max(0, objAnnuel - realise), moisRestants, besoin, atterrissage, totalP, deja, date,
+    nbMoisClos: clos.length, atteints: clos.filter(x=>x.taux>=100).length,
+    meilleur: tri[0] || null, pire: tri.length ? tri[tri.length-1] : null,
+    tx3: tx(clos.slice(-3)), txPrec3: tx(clos.slice(-6,-3)), moy3: moy(clos.slice(-3)), moyPrec3: moy(clos.slice(-6,-3))};
+}
+const eurSigne = v => (v >= 0 ? '+' : '−') + eur(Math.abs(v));
+function dashObjectifHtml(yN, yP){
+  const coms = ACTIFS();
+  if(!coms.length) return '';
+  const ts = coms.map(c => trajCom(c.id, yN));
+  const ks = ts.map(trajKpi), ke = trajKpi(trajFusion(ts, yN));
+  const ms = monthsOfYear(yN);
+  const enCours = ke.etat === 'cours';
+  const moisCours = enCours ? monthLabel(ms[ke.idx-1]).split(' ')[0] : '';
+  const fj = d => d.toLocaleDateString('fr-FR',{day:'numeric', month:'long'});
+  const dateTxt = k => !k.objAnnuel ? '—' : k.deja ? 'atteint le ' + fj(k.date)
+    : k.date ? 'vers le ' + fj(k.date) : (k.etat === 'clos' ? 'non atteint' : 'pas avant le 31 déc.');
+  const ligne = (dt, dd, small) => `<div><dt>${dt}</dt><dd>${dd}${small ? `<small>${small}</small>` : ''}</dd></div>`;
+  const panneau = (nom, k, equipe) => {
+    const a = k.objAnnuel ? k.realise / k.objAnnuel * 100 : 0;
+    const rep = k.objAnnuel ? Math.min(100, k.objDate / k.objAnnuel * 100) : 0;
+    const okRythme = k.rythme >= k.besoin;
+    const projMois = enCours ? (k.base === 'vide'
+      ? ligne('Projection ' + moisCours, '<span class="tag mute">en attente de saisie</span>', 'estimé au rythme : ' + eur(k.serie[k.idx-1]))
+      : ligne('Projection ' + moisCours, eur(k.proj),
+          (k.obM[k.idx-1] ? pct(k.proj / k.obM[k.idx-1] * 100) + " de l'objectif du mois · " : '') +
+          (k.base === 'officiel' ? 'chiffre officiel' : k.base === 'mixte' ? 'saisie partielle, complétée au rythme' : k.total ? k.faites + '/' + k.total + ' sem. saisies' : 'extrapolé des semaines saisies'))) : '';
+    return `<div class="traj${equipe ? ' eq' : ''}">
+      <div class="traj-h"><h4>${esc(nom)}</h4>${k.objAnnuel ? `<span class="tag ${a>=100?'ok':a>=rep?'info':'warn'}">${pct(a)} de l'objectif</span>` : ''}</div>
+      ${k.objAnnuel ? `<div class="jauge" title="Réalisé ${pct(a)} · attendu au ${fj(new Date())} : ${pct(rep)}"><i style="width:${Math.min(100,a)}%"></i><b style="left:${rep}%"></b></div>
+      <div class="hint" style="margin-top:6px">Repère orange : ${pct(rep)} attendu ${enCours ? 'au ' + fj(new Date()) : 'à date'}</div>` : `<div class="note warn">Aucun objectif annuel ${yN} saisi.</div>`}
+      <dl class="trajl">
+        ${ligne('Objectif annuel', eur(k.objAnnuel))}
+        ${ligne('Réalisé à date', eur(k.realise))}
+        ${ligne('Reste à faire', eur(k.reste))}
+        ${k.objAnnuel ? ligne('Avance / retard', `<span style="color:var(--${k.avance>=0?'ok':'bad'})">${eurSigne(k.avance)}</span>`, k.avance >= 0 ? "d'avance sur l'objectif à date" : "de retard sur l'objectif à date") : ''}
+        ${enCours && k.objAnnuel ? ligne('À faire par mois', eur(k.besoin), `${moisCours} → déc. · rythme actuel ${eur(k.rythme)} <span class="tag ${okRythme?'ok':'bad'}">${okRythme?'suffisant':'insuffisant'}</span>`) : ''}
+        ${projMois}
+        ${ligne(k.etat === 'clos' ? 'CA de l\'année' : 'Atterrissage 31 déc.', eur(k.atterrissage), (k.objAnnuel ? pct(k.atterrissage / k.objAnnuel * 100) + " de l'objectif · " : '') + yP + ' : ' + eur(k.totalP) + ' ' + evoTag(evo(k.atterrissage, k.totalP)))}
+        ${ligne("Date d'atteinte", dateTxt(k), k.objAnnuel && !k.deja && k.date ? 'au rythme actuel' : '')}
+        ${equipe ? '' : ligne('Contribution', ke.realise ? pct(k.realise / ke.realise * 100) : '—', "du CA de l'équipe · " + (ke.objAnnuel ? pct(k.realise / ke.objAnnuel * 100) : '—') + " de l'objectif équipe")}
+      </dl>
+    </div>`;
+  };
+  const tend = k => {
+    if(k.tx3 === null || k.txPrec3 === null) return '<span class="tag mute">—</span>';
+    const d = k.tx3 - k.txPrec3;
+    return d > 2 ? `<span class="tag ok">▲ accélère</span>` : d < -2 ? `<span class="tag bad">▼ ralentit</span>` : `<span class="tag mute">■ stable</span>`;
+  };
+  const moisTx = x => x ? `${monthLabel(x.m).split(' ')[0]} <span class="tag ${x.taux>=100?'ok':x.taux>=80?'warn':'bad'}">${pct(x.taux)}</span>` : '—';
+  const regRow = (nom, k, eq) => `<tr${eq ? ' class="tr-eq"' : ''}>
+    <td><strong>${esc(nom)}</strong></td>
+    <td style="min-width:130px"><span class="mono" style="font-weight:600">${k.atteints} / ${k.nbMoisClos}</span> <span class="hint">mois atteints</span>
+      <div class="bar"><i class="${k.nbMoisClos && k.atteints/k.nbMoisClos>=.75?'ok':k.nbMoisClos && k.atteints/k.nbMoisClos<.5?'bad':''}" style="width:${k.nbMoisClos ? k.atteints/k.nbMoisClos*100 : 0}%"></i></div></td>
+    <td>${moisTx(k.meilleur)}</td>
+    <td>${moisTx(k.pire)}</td>
+    <td class="num mono">${k.moy3 !== null ? eur(k.moy3) + '<div class="hint">' + (k.tx3 !== null ? pct(k.tx3) + " de l'objectif" : '') + '</div>' : '—'}</td>
+    <td class="num mono" style="color:var(--ink3)">${k.moyPrec3 !== null ? eur(k.moyPrec3) + '<div class="hint">' + (k.txPrec3 !== null ? pct(k.txPrec3) + " de l'objectif" : '') + '</div>' : '—'}</td>
+    <td>${tend(k)}</td></tr>`;
+  const nbM = ke.etat === 'cours' ? ke.idx : ke.etat === 'clos' ? 12 : 0;
+  const ecartCell = (n, p) => `<td class="num mono">${eur(n)}</td><td class="num mono" style="color:var(--${n-p>=0?'ok':'bad'})">${p || n ? eurSigne(n - p) : '—'}<div>${evoTag(evo(n, p))}</div></td>`;
+  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
+    <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
+    ${ks.map(k => ecartCell(k.caM[i], k.caP[i])).join('')}
+    ${ecartCell(ke.caM[i], ke.caP[i])}</tr>`).join('');
+  const sumTo = (a) => a.slice(0, nbM).reduce((s,v)=>s+v,0);
+  return `
+<div class="card">
+  <div class="card-h">
+    <div><div class="eyebrow">Objectif ${yN} · ${enCours ? 'au ' + fj(new Date()) : 'exercice ' + (ke.etat==='clos' ? 'clos' : 'à venir')}</div><h3>Trajectoire vers l'objectif annuel</h3></div>
+    ${ke.objAnnuel ? `<span class="tag ${ke.avance>=0?'ok':'bad'}">${eurSigne(ke.avance)} ${ke.avance>=0?"d'avance":'de retard'} · équipe</span>` : ''}
+  </div>
+  <div class="grid ${coms.length === 2 ? 'g3' : 'g-auto'}" style="align-items:start">
+    ${coms.map((c,i) => panneau(c.nom, ks[i], false)).join('')}
+    ${panneau('Équipe', ke, true)}
+  </div>
+  <p class="hint" style="margin-top:12px">Projection : réel sur les mois clos, mois en cours extrapolé à partir des semaines saisies (ou du chiffre officiel), puis moyenne des 3 derniers mois clos pour la suite de l'année.</p>
+</div>
+
+<div class="card">
+  <div class="card-h"><div><div class="eyebrow">Mois clos ${yN}</div><h3>Rythme et régularité</h3></div><span class="hint">un mois est atteint quand le CA couvre son objectif</span></div>
+  <div class="tw"><table>
+    <thead><tr><th>Commercial</th><th>Mois atteints</th><th>Meilleur mois</th><th>Moins bon mois</th><th class="num">3 derniers mois</th><th class="num">3 mois précédents</th><th>Tendance</th></tr></thead>
+    <tbody>${coms.map((c,i) => regRow(c.nom, ks[i], false)).join('')}${regRow('Équipe', ke, true)}</tbody>
+  </table></div>
+</div>
+
+<div class="card">
+  <div class="card-h"><h3>CA cumulé · ${yN} face à l'objectif et à ${yP}</h3><span class="hint">trait plein : réalisé · tirets : projection et objectif</span></div>
+  <div class="chartbox"><canvas id="chDashObj"></canvas></div>
+</div>
+
+<div class="card">
+  <div class="card-h"><div><div class="eyebrow">Comparaison mois par mois</div><h3>Écart avec ${yP}</h3></div></div>
+  <div class="tw"><table>
+    <thead>
+      <tr><th rowspan="2">Mois</th>${coms.map(c => `<th colspan="2" class="num" style="text-align:center">${esc(c.nom)}</th>`).join('')}<th colspan="2" class="num" style="text-align:center">Équipe</th></tr>
+      <tr>${coms.concat([{}]).map(() => `<th class="num">CA ${yN}</th><th class="num">Écart vs ${yP}</th>`).join('')}</tr>
+    </thead>
+    <tbody>${ecartRows || `<tr><td colspan="${coms.length*2+3}" class="hint">Aucun mois à comparer.</td></tr>`}</tbody>
+    <tfoot><tr style="border-top:2px solid var(--line2)"><td style="font-weight:600">Cumul</td>
+      ${ks.map(k => ecartCell(sumTo(k.caM), sumTo(k.caP))).join('')}${ecartCell(sumTo(ke.caM), sumTo(ke.caP))}</tr></tfoot>
+  </table></div>
+</div>`;
+}
+function dashObjectifChart(){
+  const el = document.getElementById('chDashObj'); if(!el) return;
+  const coms = ACTIFS(); if(!coms.length) return;
+  const y = YEAR, yP = String(+y - 1), ms = monthsOfYear(y);
+  const t = trajFusion(coms.map(c => trajCom(c.id, y)), y);
+  const nbReel = t.etat === 'cours' ? t.idx : t.etat === 'clos' ? 12 : 0;
+  let a = 0, p = 0, o = 0, q = 0;
+  const reel = ms.map((m,i) => { a += t.caM[i]; return i < nbReel ? a : null; });
+  const proj = ms.map((m,i) => { p += t.serie[i]; return (t.etat === 'cours' && i >= t.nbClos - 1) ? p : null; });
+  const obj = ms.map((m,i) => (o += t.obM[i]));
+  const prec = ms.map((m,i) => (q += t.caP[i]));
+  CHARTS.dObj = new Chart(el, {type:'line', data:{labels: ms.map(m => monthLabel(m).split(' ')[0]), datasets:[
+    {label:'Réalisé ' + y, data:reel, borderColor:'#1f5a96', backgroundColor:'rgba(31,90,150,.12)', fill:true, tension:.3, pointRadius:3, borderWidth:2.5},
+    {label:'Projection', data:proj, borderColor:'#1f5a96', borderDash:[5,4], pointRadius:2, tension:.3, spanGaps:false},
+    {label:'Objectif cumulé', data:obj, borderColor:'#e08a1e', borderDash:[7,4], pointRadius:0, tension:.3},
+    {label:'Réalisé ' + yP, data:prec, borderColor:'#8fb6dd', borderDash:[2,3], pointRadius:0, tension:.3}
+  ]}, options:{...CHART_BASE, plugins:{...CHART_BASE.plugins, tooltip:{callbacks:{label: c => c.dataset.label + ' : ' + eur(c.parsed.y)}}},
+    scales:{...CHART_BASE.scales, y:{...CHART_BASE.scales.y, ticks:{...CHART_BASE.scales.y.ticks, callback: v => (v/1000).toLocaleString('fr-FR') + ' k€'}}}}});
+}
+
 VIEWS['pilotage:dashboard'] = () => {
   const mk = dashMonth();
   const moisIdx = +mk.slice(5,7);
@@ -1103,6 +1409,7 @@ VIEWS['pilotage:dashboard'] = () => {
   const objAnnuel = ACTIFS().reduce((s,c)=>s+(+objAn(c.id, yN).ca||0),0);
   const atteinte = tot.obj ? tot.ca/tot.obj*100 : 0;
   const atteinteAn = objAnnuel ? cum.ca/objAnnuel*100 : 0;
+const trajHtml = dashObjectifHtml(yN, yP);
 
   const moisN = ACTIFS().reduce((s,c)=>s+stats(c.id, mk).ca, 0);
   const moisP = ACTIFS().reduce((s,c)=>s+stats(c.id, yP + mk.slice(4)).ca, 0);
@@ -1189,7 +1496,8 @@ VIEWS['pilotage:dashboard'] = () => {
     ${!cum.caP ? `<div class="note" style="margin-top:14px">Aucune donnée ${yP} pour le moment. Les comparaisons apparaîtront dès que l'exercice précédent sera renseigné — c'est ce que l'import des anciennes applications alimente.</div>` : ''}
   </div>
 
-  <div class="card">
+  ${trajHtml}
+<div class="card">
     <div class="card-h">
       <h3>Par commercial</h3>
       <div style="display:flex;align-items:center;gap:10px">
@@ -1244,15 +1552,16 @@ VIEWS['pilotage:dashboard'] = () => {
 
 const CHART_BASE = {
   responsive:true, maintainAspectRatio:false,
-  plugins:{legend:{labels:{color:'#9fb2d4',font:{family:'Instrument Sans',size:12},boxWidth:12}}},
+  plugins:{legend:{labels:{color:'#3b5170',font:{family:'Instrument Sans',size:12},boxWidth:12}}},
   scales:{
-    x:{ticks:{color:'#6a7fa5',font:{size:11}},grid:{color:'#1f3352'}},
-    y:{ticks:{color:'#6a7fa5',font:{size:11}},grid:{color:'#1f3352'},beginAtZero:true}
+    x:{ticks:{color:'#6b7c95',font:{size:11}},grid:{color:'#e3e9f1'}},
+    y:{ticks:{color:'#6b7c95',font:{size:11}},grid:{color:'#e3e9f1'},beginAtZero:true}
   }
 };
-const PALETTE = ['#4d9bff','#22c6d8','#2fbf71','#e0576a','#a78bfa','#f0a13b'];
+const PALETTE = ['#1f5a96','#6aa3d8','#1e9455','#c7364a','#7a6fd0','#e08a1e'];
 
 AFTER['pilotage:dashboard'] = () => {
+dashObjectifChart();
   const yN = YEAR, yP = String(+YEAR - 1);
   const ms = monthsOfYear(yN);
   const c1 = document.getElementById('chDash1');
@@ -1261,7 +1570,7 @@ AFTER['pilotage:dashboard'] = () => {
     data:{ labels: ms.map(m=>monthLabel(m).split(' ')[0]), datasets:[
       ...ACTIFS().map((c,i)=>({label:c.nom+' '+yN, data:ms.map(m=>stats(c.id,m).ca), backgroundColor:PALETTE[i%6], borderRadius:4, stack:'n'})),
       {label:'Total '+yP, type:'line', data:monthsOfYear(yP).map(m=>ACTIFS().reduce((s,c)=>s+stats(c.id,m).ca,0)),
-       borderColor:'#6a7fa5', borderDash:[6,4], pointRadius:2, tension:.3}
+       borderColor:'#6b7c95', borderDash:[6,4], pointRadius:2, tension:.3}
     ]},
     options:{...CHART_BASE, scales:{...CHART_BASE.scales, x:{...CHART_BASE.scales.x, stacked:true}, y:{...CHART_BASE.scales.y, stacked:true}}}
   });
@@ -1269,9 +1578,9 @@ AFTER['pilotage:dashboard'] = () => {
   if(c2) CHARTS.d2 = new Chart(c2, {
     type:'line',
     data:{ labels: ms.map(m=>monthLabel(m).split(' ')[0]), datasets:[
-      {label:'Visites', data:ms.map(m=>ACTIFS().reduce((s,c)=>s+stats(c.id,m).visites,0)), borderColor:'#4d9bff', backgroundColor:'rgba(77,155,255,.14)', fill:true, tension:.35},
-      {label:'Commandes', data:ms.map(m=>ACTIFS().reduce((s,c)=>s+stats(c.id,m).commandes,0)), borderColor:'#2fbf71', backgroundColor:'rgba(47,191,113,.1)', fill:true, tension:.35},
-      {label:'Nouveaux clients', data:ms.map(m=>ACTIFS().reduce((s,c)=>s+stats(c.id,m).nouveaux,0)), borderColor:'#22c6d8', tension:.35}
+      {label:'Visites', data:ms.map(m=>ACTIFS().reduce((s,c)=>s+stats(c.id,m).visites,0)), borderColor:'#1f5a96', backgroundColor:'rgba(31,90,150,.12)', fill:true, tension:.35},
+      {label:'Commandes', data:ms.map(m=>ACTIFS().reduce((s,c)=>s+stats(c.id,m).commandes,0)), borderColor:'#1e9455', backgroundColor:'rgba(30,148,85,.1)', fill:true, tension:.35},
+      {label:'Nouveaux clients', data:ms.map(m=>ACTIFS().reduce((s,c)=>s+stats(c.id,m).nouveaux,0)), borderColor:'#6aa3d8', tension:.35}
     ]},
     options: CHART_BASE
   });
@@ -1450,9 +1759,9 @@ AFTER['pilotage:graphiques'] = () => {
   const seriePrec = monthsOfYear(yP).map(m => { cumP += ACTIFS().reduce((s,c)=>s+stats(c.id,m).ca,0); return cumP; });
   const g1 = document.getElementById('chG1');
   if(g1) CHARTS.g1 = new Chart(g1,{type:'line',data:{labels:ms.map(m=>monthLabel(m).split(' ')[0]),datasets:[
-    {label:'CA cumulé '+y,data:serieCum,borderColor:'#4d9bff',backgroundColor:'rgba(77,155,255,.16)',fill:true,tension:.3},
-    {label:'Objectif cumulé',data:serieObj,borderColor:'#6a7fa5',borderDash:[6,4],tension:.3},
-    {label:'CA cumulé '+yP,data:seriePrec,borderColor:'#22c6d8',borderDash:[3,3],pointRadius:0,tension:.3}
+    {label:'CA cumulé '+y,data:serieCum,borderColor:'#1f5a96',backgroundColor:'rgba(31,90,150,.12)',fill:true,tension:.3},
+    {label:'Objectif cumulé',data:serieObj,borderColor:'#6b7c95',borderDash:[6,4],tension:.3},
+    {label:'CA cumulé '+yP,data:seriePrec,borderColor:'#6aa3d8',borderDash:[3,3],pointRadius:0,tension:.3}
   ]},options:CHART_BASE});
 
   const g2 = document.getElementById('chG2');
@@ -1464,14 +1773,14 @@ AFTER['pilotage:graphiques'] = () => {
   DB.visites.filter(v=>(v.date||'').startsWith(y)).forEach(v=>{ cnt[v.resultat] = (cnt[v.resultat]||0)+1; });
   const g3 = document.getElementById('chG3');
   if(g3) CHARTS.g3 = new Chart(g3,{type:'doughnut',data:{labels:Object.keys(cnt),
-    datasets:[{data:Object.values(cnt),backgroundColor:PALETTE,borderColor:'#101c31',borderWidth:2}]},
+    datasets:[{data:Object.values(cnt),backgroundColor:PALETTE,borderColor:'#ffffff',borderWidth:2}]},
     options:{responsive:true,maintainAspectRatio:false,cutout:'62%',plugins:CHART_BASE.plugins}});
 
   const top = DB.clients.map(c=>({nom:c.nom, ca:Object.entries(c.caByMonth||{}).filter(([k])=>k.startsWith(y)).reduce((s,[,v])=>s+v,0)}))
     .filter(x=>x.ca>0).sort((a,b)=>b.ca-a.ca).slice(0,10);
   const g4 = document.getElementById('chG4');
   if(g4) CHARTS.g4 = new Chart(g4,{type:'bar',data:{labels:top.map(t=>t.nom),
-    datasets:[{label:'CA',data:top.map(t=>t.ca),backgroundColor:'#4d9bff',borderRadius:4}]},
+    datasets:[{label:'CA',data:top.map(t=>t.ca),backgroundColor:'#1f5a96',borderRadius:4}]},
     options:{...CHART_BASE,indexAxis:'y',plugins:{legend:{display:false}}}});
 };
 
@@ -2284,9 +2593,9 @@ AFTER['performance:rentabilite'] = () => {
   CHARTS.renta = new Chart(el, {
     type:'line',
     data:{ labels: actives.map(l => monthLabel(l.mois).split(' ')[0]), datasets:[
-      {label:'Marge cumulée', data:margeCum, borderColor:'#2fbf71', backgroundColor:'rgba(47,191,113,.14)', fill:true, tension:.3},
-      {label:'Coût cumulé', data:coutCum, borderColor:'#e0576a', borderDash:[6,4], tension:.3},
-      {label:'Résultat cumulé', data:actives.map(l => l.cumul), borderColor:'#4d9bff', tension:.3}
+      {label:'Marge cumulée', data:margeCum, borderColor:'#1e9455', backgroundColor:'rgba(47,191,113,.14)', fill:true, tension:.3},
+      {label:'Coût cumulé', data:coutCum, borderColor:'#c7364a', borderDash:[6,4], tension:.3},
+      {label:'Résultat cumulé', data:actives.map(l => l.cumul), borderColor:'#1f5a96', tension:.3}
     ]},
     options: CHART_BASE
   });
