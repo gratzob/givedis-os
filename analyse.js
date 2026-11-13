@@ -75,7 +75,7 @@
     Object.values(visParClient).forEach(a => a.sort((x,y) => (y.date||'').localeCompare(x.date||'')));
 
     const debutFen = prev[0] + '-01';
-    const rows = DB.clients.filter(c => !com || c.commercial === com).map(c => {
+    const rows = DB.clients.filter(c => !com || commercialDe(c, M.slice(0,4)) === com).map(c => {
       const caM = m => caClientMois(c, m);
       const cRec = sum(rec.map(caM)), cPrev = sum(prev.map(caM));
       const margeOf = ms => sum(ms.map(m => caM(m) * (tauxClient(c, m) || 0) / 100));
@@ -131,7 +131,7 @@
 
     /* concentration par commercial */
     const conc = DB.commerciaux.filter(co => !com || co.id === com).map(co => {
-      const l = rows.filter(r => r.c.commercial === co.id && r.ytd > 0).sort((a,b) => b.ytd - a.ytd);
+      const l = rows.filter(r => commercialDe(r.c, M.slice(0,4)) === co.id && r.ytd > 0).sort((a,b) => b.ytd - a.ytd);
       const tot = sum(l.map(r => r.ytd));
       const t5 = tot ? sum(l.slice(0,5).map(r => r.ytd)) / tot * 100 : 0;
       const t10 = tot ? sum(l.slice(0,10).map(r => r.ytd)) / tot * 100 : 0;
@@ -406,7 +406,7 @@
     vis.forEach(v => { parType[v.type||'Autre'] = (parType[v.type||'Autre']||0)+1; parRes[v.resultat||'—'] = (parRes[v.resultat||'—']||0)+1; });
     const Md = dernierDetail(mk);
     const a = Md ? analyser(Md, com) : null;
-    const top = Md ? DB.clients.filter(c => c.commercial === com).map(c => ({c, ca:caClientMois(c, Md)}))
+    const top = Md ? DB.clients.filter(c => commercialDe(c, Md.slice(0,4)) === com).map(c => ({c, ca:caClientMois(c, Md)}))
       .filter(x => x.ca > 0).sort((x,z) => z.ca - x.ca).slice(0,5) : [];
     let prime = null; try{ prime = calcPrime(com, mk); }catch(e){}
     let nvx = []; try{ nvx = nouveauxDuMois(com, mk); }catch(e){}

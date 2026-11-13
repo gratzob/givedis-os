@@ -642,6 +642,41 @@ function estProspect(c){ return !!c && !enCompta(c); }
 function estVisiteProspection(v){
   return v.type === 'Prospection' || estProspect(clientById(v.clientId));
 }
+/* ---------- Portefeuilles par exercice ----------
+   DB.portefeuilles[AAAA] = {statut:'brouillon'|'valide'|'historique', affect:{clientId: commercialId}}
+   « historique » : photo du portefeuille de l'année précédente, prise à la validation,
+   pour que les chiffres passés restent rattachés au commercial de l'époque. */
+function pfAnnee(y){ return (DB.portefeuilles || {})[String(y)] || null; }
+function pfActif(p){ return !!p && (p.statut === 'valide' || p.statut === 'historique'); }
+/* Commercial d'un client sur l'exercice y (portefeuilles validés seulement). */
+function commercialDe(c, y){
+  if(!c) return null;
+  y = String(y || YEAR).slice(0,4);
+  const pf = DB.portefeuilles || {};
+  const ans = Object.keys(pf).filter(k => pfActif(pf[k])).sort();
+  if(!ans.length) return c.commercial;
+  let a = ans.filter(k => k <= y).pop();
+  if(!a) a = ans[0];
+  const v = pf[a].affect && pf[a].affect[c.id];
+  return v || c.commercial;
+}
+/* Comme commercialDe, mais tient compte d'un portefeuille encore en brouillon. */
+function commercialPrevu(c, y){
+  const p = pfAnnee(y);
+  if(p && p.affect && p.affect[c.id]) return p.affect[c.id];
+  return commercialDe(c, y);
+}
+/* Client retrouvé sur le portefeuille de l'année (import compta d'un mois donné). */
+function findClientAnnee(nom, com, y){
+  const k = normKey(nom);
+  return DB.clients.find(c => c.nomKey === k && commercialDe(c, y) === com) || findClient(nom, com);
+}
+/* Client déjà rattaché à ce commercial par un portefeuille (même en brouillon) :
+   évite de le recréer quand le portefeuille envoyé au terrain revient. */
+function pfConnu(nom, com){
+  const k = normKey(nom), pf = DB.portefeuilles || {};
+  return DB.clients.some(c => c.nomKey === k && Object.keys(pf).some(y => pf[y].affect && pf[y].affect[c.id] === com));
+}
 function clientById(id){ return DB.clients.find(c => c.id === id); }
 function lastVisitOf(clientId){
   const vs = DB.visites.filter(v => v.clientId === clientId).sort((a,b) => (b.date||'').localeCompare(a.date||''));
@@ -817,6 +852,8 @@ function clientModal(id){
   openModal(`
     <div class="eyebrow">${estProspect(c)?'Prospect (hors compta)':esc(c.reseau||'Client')} · ${esc(whoName(c.commercial))}</div>
     <h3 style="font-size:23px">${esc(c.nom)}</h3>
+    ${(() => { const ys = Object.keys(DB.portefeuilles||{}).filter(y => pfActif(DB.portefeuilles[y])).sort();
+      return ys.length ? `<div class="hint" style="margin-top:4px">Portefeuille : ${ys.map(y => y + ' ' + esc(whoName(commercialDe(c, y)))).join(' → ')}</div>` : ''; })()}
     <div class="grid g3" style="margin:16px 0">
       <div class="kpi"><div class="lab">CA ${YEAR}</div><div class="val" style="font-size:24px">${eur(caY)}</div></div>
       <div class="kpi info"><div class="lab">Visites</div><div class="val" style="font-size:24px">${vs.length}</div></div>
@@ -1089,7 +1126,7 @@ function moisNouveau(c, y){
   return null;
 }
 function nouveauxDuMois(com, mk){
-  return DB.clients.filter(c => c.commercial === com && moisNouveau(c, String(mk).slice(0,4)) === mk);
+  return DB.clients.filter(c => commercialDe(c, String(mk).slice(0,4)) === com && moisNouveau(c, String(mk).slice(0,4)) === mk);
 }
 /* Gros nouveaux clients (1re commande ≥ seuil, 800 € par défaut) retenus pour la prime.
    Il faut au moins 3 nouveaux comptes dans le mois : les 2 premiers servent de seuil
@@ -1162,7 +1199,7 @@ function moisEcoules(y){
   return +todayISO().slice(5,7);
 }
 function caSelMois(com, m){
-  return DB.clients.filter(c => c.commercial === com && estSelRenta(c))
+  return DB.clients.filter(c => commercialDe(c, String(m).slice(0,4)) === com && estSelRenta(c))
     .reduce((s,c) => s + (+(c.caByMonth||{})[m] || 0), 0);
 }
 function renta(com, y){
@@ -1170,7 +1207,7 @@ function renta(com, y){
   const nbMois = moisEcoules(y);
   const repli = tauxMargeRenta(com, y);
   const cout = coutMensuel(com);
-  const clientsSel = DB.clients.filter(c => c.commercial === com && estSelRenta(c));
+  const clientsSel = DB.clients.filter(c => commercialDe(c, y) === com && estSelRenta(c));
   /* La marge se calcule client par client : chacun peut avoir son propre taux. */
   const lignes = ms.map((m,i) => {
     let ca = 0, mg = 0;
@@ -1592,7 +1629,7 @@ VIEWS['pilotage:dashboard'] = () => {
   const caObj = rObj.reduce((s,r)=>s+r.s.ca,0), cumObj = rObj.reduce((s,r)=>s+r.n.ca,0);
   const atteinte = tot.obj ? caObj/tot.obj*100 : 0;
   const atteinteAn = objAnnuel ? cumObj/objAnnuel*100 : 0;
-  const clientsActifs = DB.clients.filter(cl => ACTIFS().some(c => c.id === cl.commercial) && caClientMois(cl, mk) > 0).length;
+  const clientsActifs = DB.clients.filter(cl => ACTIFS().some(c => c.id === commercialDe(cl, mk.slice(0,4))) && caClientMois(cl, mk) > 0).length;
 const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
 
   const moisN = ACTIFS().reduce((s,c)=>s+stats(c.id, mk).ca, 0);
@@ -1617,7 +1654,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
   const moisOptions = monthsOfYear(yN).map(m => `<option value="${m}" ${m===mkCom?'selected':''}>${monthLabel(m)}</option>`).join('');
 
   const topClientsHtml = ACTIFS().map(c => {
-    const top = DB.clients.filter(cl=>cl.commercial===c.id)
+    const top = DB.clients.filter(cl=>commercialDe(cl, mkCom.slice(0,4))===c.id)
       .map(cl=>({nom:cl.nom, ca:(cl.caByMonth||{})[mkCom]||0}))
       .filter(x=>x.ca>0)
       .sort((a,b)=>b.ca-a.ca)
@@ -2632,9 +2669,9 @@ VIEWS['performance:rentabilite'] = () => {
   const res = coms.map(c => ({c, r: renta(c.id, YEAR)}));
   const moi = res.find(x => x.c.id === RENTA_COM).r;
 
-  const cochesRenta = DB.clients.filter(c => c.commercial === RENTA_COM && estSelRenta(c))
+  const cochesRenta = DB.clients.filter(c => commercialDe(c, YEAR) === RENTA_COM && estSelRenta(c))
     .sort((a,b)=>a.nom.localeCompare(b.nom));
-  let liste = DB.clients.filter(c => c.commercial === RENTA_COM);
+  let liste = DB.clients.filter(c => commercialDe(c, YEAR) === RENTA_COM);
   if(RENTA_Q){ const q = normKey(RENTA_Q); liste = liste.filter(c => c.nomKey.includes(q)); }
   liste = liste.map(c => ({
     c, sel: estSelRenta(c),
@@ -2792,15 +2829,15 @@ function rentaToggle(id, val){
   save(); render();
 }
 function rentaTout(val){
-  DB.clients.filter(c => c.commercial === RENTA_COM).forEach(c => { c.rentaSel = val; });
+  DB.clients.filter(c => commercialDe(c, YEAR) === RENTA_COM).forEach(c => { c.rentaSel = val; });
   save(); toast(val?'Tous les clients cochés':'Tous les clients décochés'); render();
 }
 function rentaDefaut(){
-  DB.clients.filter(c => c.commercial === RENTA_COM).forEach(c => { delete c.rentaSel; });
+  DB.clients.filter(c => commercialDe(c, YEAR) === RENTA_COM).forEach(c => { delete c.rentaSel; });
   save(); toast('Sélection ramenée aux ouvertures de ' + YEAR, 'ok'); render();
 }
 function saveTauxMarge(){
-  const coches = DB.clients.filter(c => c.commercial === RENTA_COM && estSelRenta(c))
+  const coches = DB.clients.filter(c => commercialDe(c, YEAR) === RENTA_COM && estSelRenta(c))
     .sort((a,b)=>a.nom.localeCompare(b.nom));
   let n = 0;
   coches.forEach((c,i) => {
@@ -3995,8 +4032,8 @@ function validerCompta(){
   if(!prets.length){ toast('Aucun relevé exploitable pour l\'année choisie.', 'bad'); return; }
 
   let crees = 0, majs = 0, moisTraites = 0, tauxEcrits = 0;
-  const rattache = (nom, com) => {
-    let c = findClient(nom, com);
+  const rattache = (nom, com, mois) => {
+    let c = findClientAnnee(nom, com, String(mois || '').slice(0,4) || YEAR);
     if(!c){ c = ensureClient(nom, com, {source:'compta'}); crees++; }
     else majs++;
     c.enCompta = true;            /* présent dans le fichier compta : client, plus prospect */
@@ -4008,7 +4045,7 @@ function validerCompta(){
     if(x.type === 'recap'){
       x.periodes.forEach(p => {
         p.lignes.forEach(l => {
-          const c = rattache(l.nom, x.commercial);
+          const c = rattache(l.nom, x.commercial, p.mois);
           c.caByMonth[p.mois] = Math.round(l.ca * 100) / 100;
           /* La marge de la compta remplace le taux saisi à la main.
              Les avoirs, à chiffre négatif, portent une marge négative
@@ -4030,7 +4067,7 @@ function validerCompta(){
       });
     } else {
       x.lignes.forEach(l => {
-        const c = rattache(l.nom, x.commercial);
+        const c = rattache(l.nom, x.commercial, x.mois);
         c.caByMonth[x.mois] = Math.round(l.montant * 100) / 100;
       });
       DB.officiels[x.mois] = DB.officiels[x.mois] || {};
@@ -4653,7 +4690,7 @@ function fbsAppliquerPortefeuilles(snap){
     const com = commercialId(p.commercial || FBS_NOMS[d.id] || 'Clément');
     (p.clients || []).forEach(c => {
       const nom = typeof c === 'string' ? c : (c && c.client);
-      if(nom && !findClient(nom, com)){ ensureClient(nom, com, {source:'terrain'}); n++; }
+      if(nom && !findClient(nom, com) && !pfConnu(nom, com)){ ensureClient(nom, com, {source:'terrain'}); n++; }
     });
   });
   if(n){ save(); fbsRafraichirVue(true); }
@@ -4750,5 +4787,6 @@ if(fbsDisponible()){
 <script src="lecture.js"></script>
 <script src="analyse.js"></script>
 <script src="reunion.js"></script>
+<script src="portefeuilles.js"></script>
 </body>
 </html>
