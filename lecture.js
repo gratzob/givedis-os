@@ -17,6 +17,7 @@
 
   var params = new URLSearchParams(location.search);
   var RO = params.has('lire');
+  window.GOS_RO = RO;
   var FICHIER_LECTURE = 'givedis-os-lecture.json';
   var CLE_MDP = 'gos_ro_mdp';
   var ITERATIONS = 250000;
@@ -178,7 +179,10 @@
     window.roDefinirMdp = function(){
       var v = (document.getElementById('roMdp') || {}).value || '';
       if(v.length < 10){ toast('10 caractères minimum', 'bad'); return; }
+      var ancien = lsGet(CLE_MDP);
       lsSet(CLE_MDP, v);
+      /* Le compte « Direction » (Mot de la Direction) suit le mot de passe de consultation. */
+      if(typeof window.gosDirectionSync === 'function') window.gosDirectionSync(v, ancien);
       toast('Mot de passe enregistré sur cet appareil', 'ok');
       roPublier();
     };
@@ -370,6 +374,9 @@
           }catch(e){}
           appliquer(res[0], txt);
           voile.style.display = 'none';
+          /* Ouvre l'écriture du Mot de la Direction avec ce même mot de passe. */
+          window.GOS_RO_MDP = motDePasse;
+          try{ window.dispatchEvent(new CustomEvent('gos:ro-ouvert', {detail:{mdp:motDePasse}})); }catch(x){}
         });
     }).catch(function(e){
       try{ sessionStorage.removeItem(CLE_SESSION); localStorage.removeItem(CLE_SESSION); }catch(x){}
@@ -387,6 +394,8 @@
         return dechiffrer(paquet, mdp).then(function(txt){ appliquer(meta, txt); }, function(){
           /* le mot de passe a été changé par le propriétaire */
           mdp = null;
+          window.GOS_RO_MDP = null;
+          try{ window.dispatchEvent(new CustomEvent('gos:ro-ferme')); }catch(x){}
           try{ sessionStorage.removeItem(CLE_SESSION); localStorage.removeItem(CLE_SESSION); }catch(e){}
           donnees = null; load(); render();
           erreur('Le mot de passe a changé. Saisissez le nouveau.');

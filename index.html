@@ -132,7 +132,7 @@ main{max-width:var(--maxw);margin:0 auto;padding:20px 16px 90px}
 
 .kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;position:relative;overflow:hidden}
 .kpi::after{content:'';position:absolute;inset:0 auto 0 0;width:3px;background:var(--acc);opacity:.75}
-.kpi.ok::after{background:var(--ok)} .kpi.bad::after{background:var(--bad)} .kpi.info::after{background:var(--info)}
+.kpi.ok::after{background:var(--ok)} .kpi.bad::after{background:var(--bad)} .kpi.info::after{background:var(--info)} .kpi.warn::after{background:var(--warn)}
 .kpi .lab{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);font-weight:600}
 .kpi .val{font-family:'Rajdhani';font-weight:700;font-size:31px;line-height:1.1;margin-top:5px;font-variant-numeric:tabular-nums}
 .kpi .sub{font-size:12px;color:var(--ink3);margin-top:3px}
@@ -538,6 +538,33 @@ function isoWeek(d){
   const wn = Math.ceil((((dt - y0)/86400000)+1)/7);
   return dt.getUTCFullYear() + '-W' + String(wn).padStart(2,'0');
 }
+/* Semaine de travail : du lundi au vendredi. bornes AAAA-MM-JJ (heure locale). */
+function isoLocal(d){ return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function semaineCourante(){ return isoWeek(isoLocal(new Date())); }
+function semaineBornes(w){
+  if(!w || !w.includes('-W')) return {lun:'', ven:''};
+  const [y, ws] = w.split('-W');
+  const j4 = new Date(+y, 0, 4);
+  const lun = new Date(+y, 0, 4 - ((j4.getDay() || 7) - 1) + (parseInt(ws,10) - 1) * 7);
+  const ven = new Date(lun.getFullYear(), lun.getMonth(), lun.getDate() + 4);
+  return {lun: isoLocal(lun), ven: isoLocal(ven)};
+}
+function semaineDecalee(w, n){
+  const b = semaineBornes(w); if(!b.lun) return w;
+  const [y,m,d] = b.lun.split('-').map(Number);
+  return isoWeek(isoLocal(new Date(y, m-1, d + 7*n)));
+}
+function semaineLabel(w, court){
+  const b = semaineBornes(w); if(!b.lun) return w || '—';
+  const f = (s, o) => new Date(s + 'T12:00:00').toLocaleDateString('fr-FR', o);
+  const n = parseInt(w.split('-W')[1], 10);
+  return (court ? 'S' + n : 'Semaine ' + n) + ' · lun. ' + f(b.lun, {day:'numeric', month:'short'}) + ' → ven. ' + f(b.ven, {day:'numeric', month:'short', year:'numeric'});
+}
+/* Visites (RDV) réalisées du lundi au vendredi de la semaine w. */
+function visitesSemaine(w, com){
+  const b = semaineBornes(w);
+  return DB.visites.filter(v => v.date && v.date.slice(0,10) >= b.lun && v.date.slice(0,10) <= b.ven && (!com || v.commercial === com));
+}
 function weekToMonth(w){
   if(!w || !w.includes('-W')) return '';
   const [y,ws] = w.split('-W');
@@ -598,6 +625,22 @@ function ensureClient(nom, commercial, extra){
   c.nomKey = normKey(c.nom);
   DB.clients.push(c);
   return c;
+}
+/* ---------- Prospect ou client ----------
+   Un compte n'est client que lorsqu'il figure dans le fichier de la compta
+   importé (Données › Chiffres compta). Avant cela, il reste en prospection :
+   il n'est jamais compté comme nouveau client.
+   Comptes antérieurs à ce marquage : retenus s'ils viennent de la compta
+   ou portent déjà du chiffre. */
+function enCompta(c){
+  if(!c) return false;
+  if(c.enCompta === true || c.source === 'compta') return true;
+  if(c.enCompta === false) return false;
+  return Object.values(c.caByMonth || {}).some(v => +v);
+}
+function estProspect(c){ return !!c && !enCompta(c); }
+function estVisiteProspection(v){
+  return v.type === 'Prospection' || estProspect(clientById(v.clientId));
 }
 function clientById(id){ return DB.clients.find(c => c.id === id); }
 function lastVisitOf(clientId){
@@ -772,7 +815,7 @@ function clientModal(id){
   const vs = DB.visites.filter(v => v.clientId === id).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   const caY = Object.entries(c.caByMonth||{}).filter(([k])=>k.startsWith(YEAR)).reduce((s,[,v])=>s+v,0);
   openModal(`
-    <div class="eyebrow">${esc(c.reseau||'Client')} · ${esc(whoName(c.commercial))}</div>
+    <div class="eyebrow">${estProspect(c)?'Prospect (hors compta)':esc(c.reseau||'Client')} · ${esc(whoName(c.commercial))}</div>
     <h3 style="font-size:23px">${esc(c.nom)}</h3>
     <div class="grid g3" style="margin:16px 0">
       <div class="kpi"><div class="lab">CA ${YEAR}</div><div class="val" style="font-size:24px">${eur(caY)}</div></div>
@@ -784,7 +827,7 @@ function clientModal(id){
     ${vs.length?`<div class="tw"><table><thead><tr><th>Date</th><th>Commercial</th><th>Type</th><th>Résultat</th><th>Compte rendu</th></tr></thead>
       <tbody>${vs.map(v=>`<tr><td class="mono">${fdate(v.date)}</td><td>${esc(whoName(v.commercial))}</td><td>${esc(v.type||'—')}</td>
       <td><span class="tag ${tagResultat(v.resultat)}">${esc(v.resultat)}</span>${+v.montantCommande?`<div class="hint">cde ${eur(v.montantCommande)}</div>`:+v.montantDevis?`<div class="hint">devis ${eur(v.montantDevis)}</div>`:''}</td>
-      <td style="color:var(--ink2)">${esc(v.compteRendu||'—')}${v.contact&&(v.contact.nom||v.contact.prenom)?`<div class="hint">👤 ${esc((v.contact.prenom||'')+' '+(v.contact.nom||''))}</div>`:''}</td></tr>`).join('')}</tbody></table></div>`
+      <td style="color:var(--ink2)">${esc(v.compteRendu||'—')}${v.contact&&(v.contact.nom||v.contact.prenom)?`<div class="hint">👤 ${esc((v.contact.prenom||'')+' '+(v.contact.nom||''))}</div>`:''}${prospHtml(v)}</td></tr>`).join('')}</tbody></table></div>`
     :`<p class="hint">Aucune visite importée pour ce client.</p>`}
     <div class="btnrow" style="margin-top:18px">
       <button class="btn ghost" onclick="closeModal()">Fermer</button>
@@ -1035,6 +1078,7 @@ function caClientMois(c, m){
 }
 /* Mois (AAAA-MM) où le client devient nouveau compte sur l'exercice y, ou null. */
 function moisNouveau(c, y){
+  if(!enCompta(c)) return null;   /* absent du fichier compta : reste un prospect */
   y = String(y);
   const lim = y === todayISO().slice(0,4) ? curMonth() : y + '-12';
   for(const m of monthsOfYear(y)){
@@ -1614,6 +1658,8 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
       <div class="sub">avec du chiffre en ${monthLabel(mk)}</div></div>`}
   </div>
 
+  ${dashRdvSemaineHtml()}
+
   <div class="card">
     <div class="card-h">
       <div><div class="eyebrow">Cumul janvier → ${monthLabel(mk).split(' ')[0]}</div><h3>Exercice ${yN} comparé à ${yP}</h3></div>
@@ -1698,6 +1744,40 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
   </div>`;
 };
 
+/* RDV effectués dans la semaine en cours (lundi → vendredi), par commercial. */
+function dashRdvSemaineHtml(){
+  const w = semaineCourante(), wP = semaineDecalee(w, -1);
+  const lignes = ACTIFS().map(c => {
+    const vs = visitesSemaine(w, c.id);
+    return {c, n: vs.length, prosp: vs.filter(estVisiteProspection).length,
+      devis: vs.filter(v => v.resultat === 'Devis émis' || v.resultat === 'Devis établi').length,
+      cdes: vs.filter(v => ['Commande','Vente','Prise de commande'].includes(v.resultat)).length,
+      prec: visitesSemaine(wP, c.id).length};
+  });
+  const t = lignes.reduce((a,l) => ({n:a.n+l.n, prosp:a.prosp+l.prosp, devis:a.devis+l.devis, cdes:a.cdes+l.cdes, prec:a.prec+l.prec}),
+    {n:0, prosp:0, devis:0, cdes:0, prec:0});
+  const ecart = (n, p) => { const d = n - p; return `<span class="tag ${d>0?'ok':d<0?'bad':'mute'}">${d>0?'+':''}${d}</span>`; };
+  return `
+  <div class="card">
+    <div class="card-h">
+      <div><div class="eyebrow">Semaine en cours</div><h3>RDV effectués · ${esc(semaineLabel(w))}</h3></div>
+      <span class="tag info">${t.n} RDV équipe</span>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>${EQUIPE==='magasin'?'Vendeur':'Commercial'}</th><th class="num">RDV</th><th class="num">dont prospection</th><th class="num">Devis</th><th class="num">Commandes</th><th class="num">Sem. précédente</th><th>Écart</th></tr></thead>
+      <tbody>${lignes.map(l => `<tr>
+        <td><strong>${esc(l.c.nom)}</strong></td>
+        <td class="num mono" style="font-weight:700;font-size:16px">${l.n}</td>
+        <td class="num mono">${l.prosp}</td><td class="num mono">${l.devis}</td><td class="num mono">${l.cdes}</td>
+        <td class="num mono" style="color:var(--ink3)">${l.prec}</td><td>${ecart(l.n, l.prec)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr style="border-top:2px solid var(--line2)"><td style="font-weight:600">Total</td>
+        <td class="num mono" style="font-weight:700">${t.n}</td><td class="num mono">${t.prosp}</td><td class="num mono">${t.devis}</td><td class="num mono">${t.cdes}</td>
+        <td class="num mono" style="color:var(--ink3)">${t.prec}</td><td>${ecart(t.n, t.prec)}</td></tr></tfoot>
+    </table></div>
+    <p class="hint" style="margin-top:8px">Toutes les visites saisies du lundi au vendredi, quel que soit le résultat.</p>
+  </div>`;
+}
+
 const CHART_BASE = {
   responsive:true, maintainAspectRatio:false,
   plugins:{legend:{labels:{color:'#3b5170',font:{family:'Instrument Sans',size:12},boxWidth:12}}},
@@ -1751,7 +1831,9 @@ VIEWS['pilotage:clients'] = () => {
   if(FILTRE.reseau) list = list.filter(x=>x.c.reseau===FILTRE.reseau);
   if(FILTRE.etat==='dormant') list = list.filter(x=>x.d===null||x.d>60);
   if(FILTRE.etat==='actif') list = list.filter(x=>x.d!==null&&x.d<=60);
-  if(FILTRE.etat==='nouveau') list = list.filter(x=>x.c.dateOuverture && x.c.dateOuverture.startsWith(YEAR));
+  if(FILTRE.etat==='nouveau') list = list.filter(x=>x.c.dateOuverture && x.c.dateOuverture.startsWith(YEAR) && enCompta(x.c));
+  if(FILTRE.etat==='prospect') list = list.filter(x=>estProspect(x.c));
+  if(FILTRE.etat==='client') list = list.filter(x=>enCompta(x.c));
   list.sort((a,b)=>b.caY-a.caY);
 
   return `
@@ -1777,6 +1859,8 @@ VIEWS['pilotage:clients'] = () => {
         <option value="actif" ${FILTRE.etat==='actif'?'selected':''}>Actifs (≤ 60 j)</option>
         <option value="dormant" ${FILTRE.etat==='dormant'?'selected':''}>Dormants</option>
         <option value="nouveau" ${FILTRE.etat==='nouveau'?'selected':''}>Ouverts en ${YEAR}</option>
+        <option value="client" ${FILTRE.etat==='client'?'selected':''}>Clients (dans la compta)</option>
+        <option value="prospect" ${FILTRE.etat==='prospect'?'selected':''}>Prospects (hors compta)</option>
       </select></div>
     </div>
     ${!list.length
@@ -1784,7 +1868,7 @@ VIEWS['pilotage:clients'] = () => {
       : VUE_CLIENTS === 'mensuel' ? tableauMensuel(list) : `<div class="tw"><table>
       <thead><tr><th>Client</th><th>Commercial</th><th>Réseau</th><th>Dept</th><th class="num">CA ${YEAR}</th><th>Dernière visite</th><th></th></tr></thead>
       <tbody>${list.slice(0,400).map(({c,lv,d,caY})=>`<tr>
-        <td><strong>${esc(c.nom)}</strong></td>
+        <td><strong>${esc(c.nom)}</strong>${estProspect(c)?' <span class="tag warn" title="Absent du fichier compta : compté en prospection">prospect</span>':''}</td>
         <td>${esc(whoName(c.commercial))}</td>
         <td>${esc(c.reseau||'—')}</td>
         <td class="mono">${esc(c.dept||'—')}</td>
@@ -1851,38 +1935,61 @@ function renderKeep(id){
 }
 
 /* ---------- Toutes les visites ---------- */
+/* Fiche prospection saisie sur le terrain (potentiel, achats, fournisseur, plan d'action). */
+function prospHtml(v){
+  const p = v.prospection;
+  if(!p || !(p.potentiel || p.achats || p.fournisseur || p.planAction)) return '';
+  return `<div class="hint" style="margin-top:6px;line-height:1.5">
+    ${p.potentiel?`<span class="tag info">Potentiel ${eur(p.potentiel)}</span> `:''}
+    ${p.achats?`<div>🛒 Achète : ${esc(p.achats)}</div>`:''}
+    ${p.fournisseur?`<div>🏷 Fournisseur habituel : ${esc(p.fournisseur)}</div>`:''}
+    ${p.planAction?`<div>➜ Prochaine visite : ${esc(p.planAction)}</div>`:''}</div>`;
+}
+let FILTRE_VIS = (function(){ try{ return localStorage.getItem('gos_fvis') || ''; }catch(e){ return ''; } })();
+function setFiltreVis(v){ FILTRE_VIS = v; try{ localStorage.setItem('gos_fvis', v); }catch(e){} render(); }
 VIEWS['pilotage:visites'] = () => {
   const mk = curMonth();
   let vs = DB.visites.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
   if(FILTRE.com) vs = vs.filter(v=>v.commercial===FILTRE.com);
-  const mois = DB.visites.filter(v=>monthKey(v.date)===mk);
+  if(FILTRE_VIS === 'prospection') vs = vs.filter(estVisiteProspection);
+  if(FILTRE_VIS === 'clients') vs = vs.filter(v => !estVisiteProspection(v));
+  const mois = DB.visites.filter(v=>monthKey(v.date)===mk && (!FILTRE.com || v.commercial===FILTRE.com));
+  const prospMois = mois.filter(estVisiteProspection);
+  const potMois = prospMois.reduce((s,v)=>s+(+(v.prospection||{}).potentiel||0),0);
   return `
   <div class="grid g4" style="margin-bottom:16px">
     <div class="kpi"><div class="lab">Visites du mois</div><div class="val">${mois.length}</div><div class="sub">${monthLabel(mk)}</div></div>
-    <div class="kpi ok"><div class="lab">Commandes</div><div class="val">${mois.filter(v=>v.resultat==='Commande').length}</div><div class="sub">taux ${mois.length?pct(mois.filter(v=>v.resultat==='Commande').length/mois.length*100):'—'}</div></div>
-    <div class="kpi info"><div class="lab">Devis émis</div><div class="val">${mois.filter(v=>v.resultat==='Devis émis').length}</div></div>
+    <div class="kpi warn"><div class="lab">Prospection du mois</div><div class="val">${prospMois.length}</div><div class="sub">${potMois?'potentiel '+eur(potMois):'comptes hors compta'}</div></div>
+    <div class="kpi ok"><div class="lab">Commandes</div><div class="val">${mois.filter(v=>['Commande','Vente','Prise de commande'].includes(v.resultat)).length}</div><div class="sub">${mois.filter(v=>v.resultat==='Devis émis'||v.resultat==='Devis établi').length} devis</div></div>
     <div class="kpi bad"><div class="lab">Relances ouvertes</div><div class="val">${DB.visites.filter(v=>v.relance).length}</div></div>
   </div>
   <div class="card">
-    <div class="card-h"><h3>Visites importées</h3>
+    <div class="card-h"><h3>Visites · ${vs.length}</h3>
       <div class="btnrow">
         <select style="width:auto" onchange="FILTRE.com=this.value;render()">
           <option value="">Tous les commerciaux</option>
           ${DB.commerciaux.map(c=>`<option value="${c.id}" ${FILTRE.com===c.id?'selected':''}>${esc(c.nom)}</option>`).join('')}
         </select>
+        <select style="width:auto" onchange="setFiltreVis(this.value)">
+          <option value="" ${!FILTRE_VIS?'selected':''}>Toutes les visites</option>
+          <option value="prospection" ${FILTRE_VIS==='prospection'?'selected':''}>Prospection</option>
+          <option value="clients" ${FILTRE_VIS==='clients'?'selected':''}>Clients (dans la compta)</option>
+        </select>
         <button class="btn ghost sm" onclick="exportVisitesCSV()">Export CSV</button>
         <button class="btn ghost sm" onclick="exportVisitesJSON()">Export JSON</button>
       </div>
     </div>
+    ${FILTRE_VIS==='prospection'?`<p class="hint" style="margin-bottom:12px">Visites de type « Prospection » et toutes les visites chez un compte absent du fichier compta : tant qu'il n'y figure pas, le compte reste un prospect.</p>`:''}
     ${vs.length?`<div class="tw"><table>
       <thead><tr><th>Date</th><th>Commercial</th><th>Client</th><th>Type</th><th>Résultat</th><th class="num">Affaire</th><th>Compte rendu</th></tr></thead>
-      <tbody>${vs.slice(0,400).map(v=>`<tr>
+      <tbody>${vs.slice(0,400).map(v=>{ const cl = clientById(v.clientId); return `<tr>
         <td class="mono">${fdate(v.date)}</td><td>${esc(whoName(v.commercial))}</td>
-        <td><strong>${esc(v.clientNom)}</strong></td><td>${esc(v.type||'—')}</td>
+        <td><strong>${esc(v.clientNom)}</strong>${estProspect(cl)?' <span class="tag warn">prospect</span>':''}${v.ville?`<div class="hint">📍 ${esc(v.ville)}</div>`:''}</td><td>${esc(v.type||'—')}</td>
         <td><span class="tag ${(RESULTATS.find(r=>r.v===v.resultat)||{k:'mute'}).k}">${esc(v.resultat)}</span>${+v.montantCommande?`<div class="hint">cde ${eur(v.montantCommande)} · info</div>`:+v.montantDevis?`<div class="hint">devis ${eur(v.montantDevis)} · info</div>`:''}</td>
         <td class="num mono">${v.ca?eur(v.ca):'—'}</td>
-        <td style="max-width:320px;color:var(--ink2)">${esc((v.compteRendu||'').slice(0,120))}${(v.compteRendu||'').length>120?'…':''}</td></tr>`).join('')}</tbody></table></div>`
-    :emptyState('◔','Aucune visite importée.',`<button class="btn" onclick="go('data','fichiers')">Importer des visites</button>`)}
+        <td style="max-width:340px;color:var(--ink2)">${esc((v.compteRendu||'').slice(0,120))}${(v.compteRendu||'').length>120?'…':''}${prospHtml(v)}</td></tr>`; }).join('')}</tbody></table></div>
+      ${vs.length>400?`<p class="hint" style="margin-top:10px">400 dernières visites affichées sur ${vs.length}.</p>`:''}`
+    :emptyState('◔', FILTRE_VIS ? 'Aucune visite pour ce filtre.' : 'Aucune visite importée.', FILTRE_VIS ? `<button class="btn ghost" onclick="setFiltreVis('')">Voir toutes les visites</button>` : `<button class="btn" onclick="go('data','fichiers')">Importer des visites</button>`)}
   </div>`;
 };
 
@@ -3267,9 +3374,11 @@ function exportMensuelCSV(){
 }
 
 function exportVisitesCSV(){
-  const rows = [['Date','Commercial','Client','Type','Résultat','Affaire','Compte rendu']];
+  const rows = [['Date','Commercial','Client','Statut','Type','Résultat','Affaire','Compte rendu','Potentiel €','Achats','Fournisseur habituel','Plan d\'action']];
   DB.visites.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''))
-    .forEach(v=>rows.push([v.date, whoName(v.commercial), v.clientNom, v.type||'', v.resultat||'', v.ca||0, (v.compteRendu||'').replace(/\n/g,' ')]));
+    .forEach(v=>{ const p = v.prospection || {};
+      rows.push([v.date, whoName(v.commercial), v.clientNom, estProspect(clientById(v.clientId)) ? 'Prospect' : 'Client', v.type||'', v.resultat||'', v.ca||0,
+        (v.compteRendu||'').replace(/\n/g,' '), p.potentiel||'', (p.achats||'').replace(/\n/g,' '), (p.fournisseur||'').replace(/\n/g,' '), (p.planAction||'').replace(/\n/g,' ')]); });
   dl(toCSV(rows), 'givedis-visites-'+todayISO()+'.csv', 'text/csv;charset=utf-8');
   toast('Export CSV généré', 'ok');
 }
@@ -3890,6 +3999,7 @@ function validerCompta(){
     let c = findClient(nom, com);
     if(!c){ c = ensureClient(nom, com, {source:'compta'}); crees++; }
     else majs++;
+    c.enCompta = true;            /* présent dans le fichier compta : client, plus prospect */
     c.caByMonth = c.caByMonth || {};
     return c;
   };
@@ -4499,6 +4609,10 @@ function fbsAppliquerVisites(snap){
       compteRendu: r.compteRendu || '',
       contact: {nom:r.contactNom||'', prenom:r.contactPrenom||'', tel:r.contactTel||'', email:r.contactEmail||''},
       montantDevis: +r.montantDevis || 0, montantCommande: +r.montantCommande || 0,
+      ville: r.ville || '',
+      prospection: (r.potentiel || r.achats || r.fournisseur || r.planAction)
+        ? {potentiel: +r.potentiel || 0, achats: r.achats || '', fournisseur: r.fournisseur || '', planAction: r.planAction || ''}
+        : null,
       createdAt: r.createdAt || '', fsId: r.id, source: 'terrain'
     };
     let v = DB.visites.find(x => x.fsId === r.id) || DB.visites.find(x => x.id === r.id);
@@ -4635,5 +4749,6 @@ if(fbsDisponible()){
 </script>
 <script src="lecture.js"></script>
 <script src="analyse.js"></script>
+<script src="reunion.js"></script>
 </body>
 </html>
