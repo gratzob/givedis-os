@@ -482,6 +482,7 @@ function exercices(){
 function save(){
   try{ localStorage.setItem(LS, JSON.stringify(DB)); }
   catch(e){ toast("Stockage saturé — exportez une sauvegarde puis allégez les données.", 'bad'); }
+  if(typeof gMarquer === 'function') gMarquer();
   if(typeof gAuto === 'function') gAuto();
 }
 function setWho(id){ WHO = id; localStorage.setItem('gos_who', id); render(); }
@@ -3209,6 +3210,53 @@ function ingestJson(d){
     b.regles = crit.length;
   }
 
+  /* Sauvegarde GIVEDIS OS complète : on reprend aussi tout le reste, sans rien écraser
+     de ce qui existe déjà ici (seule une fiche de réunion plus récente remplace l'ancienne). */
+  if(d.schema && d.commerciaux){
+    const plusRecent = (a, x) => String((a && a.updatedAt) || '') > String((x && x.updatedAt) || '');
+    if(Array.isArray(d.reunions)){
+      DB.reunions = DB.reunions || [];
+      d.reunions.forEach(r => {
+        if(!r || !r.semaine) return;
+        const i = DB.reunions.findIndex(x => x.semaine === r.semaine);
+        if(i < 0){ DB.reunions.push(JSON.parse(JSON.stringify(r))); b.reunions = (b.reunions||0) + 1; }
+        else if(plusRecent(r, DB.reunions[i])){ DB.reunions[i] = JSON.parse(JSON.stringify(r)); b.reunions = (b.reunions||0) + 1; }
+      });
+    }
+    const completer = (cle, profond) => {
+      const src = d[cle]; if(!src || typeof src !== 'object' || Array.isArray(src)) return;
+      DB[cle] = DB[cle] || {};
+      Object.keys(src).forEach(k => {
+        if(DB[cle][k] === undefined){ DB[cle][k] = JSON.parse(JSON.stringify(src[k])); b.autres = (b.autres||0) + 1; }
+        else if(profond && src[k] && typeof src[k] === 'object' && DB[cle][k] && typeof DB[cle][k] === 'object'){
+          Object.keys(src[k]).forEach(k2 => {
+            if(DB[cle][k][k2] === undefined){ DB[cle][k][k2] = JSON.parse(JSON.stringify(src[k][k2])); b.autres = (b.autres||0) + 1; }
+          });
+        }
+      });
+    };
+    completer('comptesRendus');
+    completer('direction');
+    completer('portefeuilles');
+    completer('officiels', true);
+    if(d.objectifs){
+      DB.objectifs = DB.objectifs || {annuel:{}, mensuel:{}};
+      ['annuel','mensuel'].forEach(t => {
+        const src = d.objectifs[t]; if(!src) return;
+        DB.objectifs[t] = DB.objectifs[t] || {};
+        Object.keys(src).forEach(com => {
+          if(DB.objectifs[t][com] === undefined){ DB.objectifs[t][com] = JSON.parse(JSON.stringify(src[com])); b.autres = (b.autres||0) + 1; }
+          else if(src[com] && typeof src[com] === 'object') Object.keys(src[com]).forEach(k => {
+            if(DB.objectifs[t][com][k] === undefined){ DB.objectifs[t][com][k] = JSON.parse(JSON.stringify(src[com][k])); b.autres = (b.autres||0) + 1; }
+          });
+        });
+      });
+    }
+    (d.commerciaux || []).forEach(c => {
+      if(c && c.id && !DB.commerciaux.some(x => x.id === c.id || normKey(x.nom) === normKey(c.nom))){ DB.commerciaux.push(JSON.parse(JSON.stringify(c))); b.autres = (b.autres||0) + 1; }
+    });
+  }
+
   /* dates d'ouverture deduites de la premiere visite */
   DB.clients.forEach(c => {
     if(!c.dateOuverture){
@@ -3228,6 +3276,8 @@ function bilanJson(b){
   if(b.semaines) p.push(b.semaines + ' semaine' + (b.semaines>1?'s':''));
   if(b.rdvs)     p.push(b.rdvs + ' RDV');
   if(b.regles)   p.push(b.regles + ' critères de prime');
+  if(b.reunions) p.push(b.reunions + ' réunion' + (b.reunions>1?'s':''));
+  if(b.autres)   p.push(b.autres + ' autre' + (b.autres>1?'s':'') + ' élément' + (b.autres>1?'s':'') + ' (objectifs, portefeuilles, comptes rendus…)');
   return p.length ? p.join(', ') : null;
 }
 
@@ -4222,7 +4272,21 @@ const GFILE = 'givedis-os.json';
 const GCLIENT_DEFAUT = '379204671270-vd52napgkkgq9dsqq0cl8v4pihie4nst.apps.googleusercontent.com';
 
 const G = { libs:false, pret:false, chargement:false, tokenClient:null,
-            token:null, expire:0, busy:false, err:null, resolve:null, reject:null };
+            token:null, expire:0, busy:false, err:null, resolve:null, reject:null,
+            rev:0, relance:false, envoi:null };
+
+/* ---------- Modifications pas encore parties sur le Drive ----------
+   Chaque enregistrement pose une marque, gardée dans le navigateur : elle
+   survit à la fermeture de la page. Elle n'est levée qu'une fois un envoi
+   réussi qui contient TOUTES les modifications faites jusque-là. */
+const GPEND = 'gos_drive_attente';
+function gEnAttente(){ try{ return !!localStorage.getItem(GPEND); }catch(e){ return false; } }
+function gMarquer(){
+  G.rev++;
+  try{ if(!localStorage.getItem(GPEND)) localStorage.setItem(GPEND, new Date().toISOString()); }catch(e){}
+  if(typeof gIndicateur === 'function') gIndicateur();
+}
+function gLever(){ try{ localStorage.removeItem(GPEND); }catch(e){} }
 
 function gConf(){
   DB.settings = DB.settings || {};
@@ -4325,8 +4389,11 @@ function gTrouverFichier(){
 }
 
 function gEnvoyer(){
-  if(G.busy) return Promise.resolve();
-  G.busy = true;
+  /* Un envoi est déjà en route : on ne perd pas la demande, on la rejoue juste après. */
+  if(G.busy){ G.relance = true; return G.envoi || Promise.resolve(); }
+  G.busy = true; G.relance = false;
+  const revDepart = G.rev;
+  if(typeof gIndicateur === 'function') gIndicateur();
   const conf = gConf();
   const contenu = JSON.stringify(DB);
   const form = new FormData();
@@ -4337,7 +4404,7 @@ function gEnvoyer(){
     ? Promise.resolve(conf.fileId)
     : gTrouverFichier().then(f => f ? f.id : null);
 
-  return majFileId.then(id => {
+  const envoi = majFileId.then(id => {
     const url = id
       ? 'https://www.googleapis.com/upload/drive/v3/files/' + id + '?uploadType=multipart'
       : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
@@ -4347,15 +4414,26 @@ function gEnvoyer(){
       body: form
     });
   }).then(r => {
+    if(r.status === 401){ G.token = null; G.expire = 0; }   /* jeton refusé : il faudra se reconnecter */
     if(!r.ok) return r.text().then(t => { throw new Error('Drive a refusé l\'envoi (' + r.status + ')'); });
     return r.json();
   }).then(f => {
     conf.fileId = f.id;
     conf.last = new Date().toISOString();
     G.err = null;
-    localStorage.setItem(LS, JSON.stringify(DB));
+    try{ localStorage.setItem(LS, JSON.stringify(DB)); }catch(e){}
+    if(G.rev === revDepart) gLever();                       /* rien n'a bougé pendant l'envoi */
     return f;
-  }).finally(() => { G.busy = false; });
+  }).catch(e => { G.err = e.message; throw e; })
+    .finally(() => {
+      G.busy = false; G.envoi = null;
+      const encore = G.relance || G.rev !== revDepart;
+      G.relance = false;
+      if(encore) gAuto();                                   /* modifs faites pendant l'envoi : on renvoie */
+      if(typeof gIndicateur === 'function') gIndicateur();
+    });
+  G.envoi = envoi;
+  return envoi;
 }
 
 function gRecuperer(){
@@ -4370,22 +4448,26 @@ function gRecuperer(){
 
 /* ---------- Sauvegarde automatique, temporisée ---------- */
 let gTimer = null;
-function gAuto(){
+function gAuto(delai){
   const conf = (DB.settings && DB.settings.google) || null;
-  if(!conf || !conf.auto || !gConnecte()) return;
+  if(!conf || !conf.auto || !gConnecte()){ if(typeof gIndicateur === 'function') gIndicateur(); return; }
   clearTimeout(gTimer);
   gTimer = setTimeout(() => {
+    gTimer = null;
     gEnvoyer()
       .then(() => { const el = document.getElementById('gEtat'); if(el) el.innerHTML = gBadge(); })
-      .catch(e => { G.err = e.message; });
-  }, 4000);
+      .catch(e => { G.err = e.message; const el = document.getElementById('gEtat'); if(el) el.innerHTML = gBadge(); });
+  }, delai == null ? 4000 : delai);
 }
 
 /* ---------- Actions de l'écran ---------- */
 function gBadge(){
   const conf = gConf();
-  if(!gConnecte()) return `<span class="tag mute">non connecté</span>`;
+  if(!gConnecte()) return gEnAttente()
+    ? `<span class="tag warn">non connecté · modifications en attente d'envoi</span>`
+    : `<span class="tag mute">non connecté</span>`;
   if(G.err) return `<span class="tag bad">erreur : ${esc(G.err)}</span>`;
+  if(gEnAttente() || G.busy) return `<span class="tag info">connecté · envoi en cours…</span>`;
   return `<span class="tag ok">connecté${conf.last ? ' · dernier envoi ' + new Date(conf.last).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''}</span>`;
 }
 
@@ -4536,7 +4618,7 @@ VIEWS['data:drive'] = () => {
   <div class="card">
     <div class="card-h"><h3>Ce que la synchronisation fait, et ne fait pas</h3></div>
     <div class="note">Elle vous permet de retrouver vos données sur un autre poste, et vous protège d'un effacement du navigateur. Elle ne rend pas l'application multi-utilisateur : Clément et Lorris continuent d'envoyer leurs visites par fichier, que vous importez.</div>
-    <p class="hint" style="margin-top:12px">La connexion Google expire au bout d'une heure environ. Passé ce délai, l'envoi automatique s'interrompt jusqu'à la reconnexion — l'état ci-dessus vous l'indique, et la sauvegarde locale, elle, continue de fonctionner sans interruption.</p>
+    <p class="hint" style="margin-top:12px">La connexion Google expire au bout d'une heure environ. L'application la renouvelle d'elle-même au premier clic qui suit, et toute modification faite entre-temps est gardée en attente puis envoyée dès que la connexion revient — même après fermeture de la page. Le voyant en bas à gauche de l'écran indique à tout moment si le Drive est à jour.</p>
   </div>`;
 };
 
@@ -4788,5 +4870,6 @@ if(fbsDisponible()){
 <script src="analyse.js"></script>
 <script src="reunion.js"></script>
 <script src="portefeuilles.js"></script>
+<script src="sauvegarde.js"></script>
 </body>
 </html>
