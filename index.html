@@ -782,7 +782,7 @@ function renderShell(){
 }
 
 function render(){
-  VIS_CA_IDX = null;
+  VIS_CA_IDX = null; NOM_IDX = null;
   Object.values(CHARTS).forEach(c => { try{ c.destroy(); }catch(e){} });
   CHARTS = {};
   if(!NAV[SPACE]) SPACE = 'pilotage';
@@ -1114,9 +1114,33 @@ function caClientMois(c, m){
   }
   return VIS_CA_IDX[c.id + '|' + m] || 0;
 }
+/* ---------- Client du magasin ----------
+   Un client attribué au magasin appartient au magasin. Le patron autorise les
+   commerciaux à y prendre des commandes : ce chiffre compte dans leur CA du mois,
+   mais le client reste au magasin et ne devient jamais un nouveau compte pour eux.
+   Concrètement : la fiche d'un itinérant dont le même client (même nom) a une
+   fiche magasin présente dans la compta. */
+var NOM_IDX = null; /* nomKey → fiches ; vidé à chaque rendu */
+function fichesDuNom(k){
+  if(!NOM_IDX || NOM_IDX.__n !== DB.clients.length){
+    NOM_IDX = new Map(); NOM_IDX.__n = DB.clients.length;
+    DB.clients.forEach(c => { const l = NOM_IDX.get(c.nomKey); l ? l.push(c) : NOM_IDX.set(c.nomKey, [c]); });
+  }
+  return NOM_IDX.get(k) || [];
+}
+function ficheMagasinDe(c, y){
+  if(!c) return null;
+  y = String(y || YEAR).slice(0,4);
+  if(equipeDe(comObj(commercialDe(c, y))) === 'magasin') return null;
+  return fichesDuNom(c.nomKey).find(d => d.id !== c.id && d.nomKey === c.nomKey && enCompta(d)
+    && equipeDe(comObj(commercialDe(d, y))) === 'magasin') || null;
+}
+function clientDuMagasin(c, y){ return !!ficheMagasinDe(c, y); }
+
 /* Mois (AAAA-MM) où le client devient nouveau compte sur l'exercice y, ou null. */
 function moisNouveau(c, y){
   if(!enCompta(c)) return null;   /* absent du fichier compta : reste un prospect */
+  if(clientDuMagasin(c, y)) return null; /* client du magasin : CA seulement, jamais nouveau compte */
   y = String(y);
   const lim = y === todayISO().slice(0,4) ? curMonth() : y + '-12';
   for(const m of monthsOfYear(y)){
@@ -1906,7 +1930,7 @@ VIEWS['pilotage:clients'] = () => {
       : VUE_CLIENTS === 'mensuel' ? tableauMensuel(list) : `<div class="tw"><table>
       <thead><tr><th>Client</th><th>Commercial</th><th>Réseau</th><th>Dept</th><th class="num">CA ${YEAR}</th><th>Dernière visite</th><th></th></tr></thead>
       <tbody>${list.slice(0,400).map(({c,lv,d,caY})=>`<tr>
-        <td><strong>${esc(c.nom)}</strong>${estProspect(c)?' <span class="tag warn" title="Absent du fichier compta : compté en prospection">prospect</span>':''}</td>
+        <td><strong>${esc(c.nom)}</strong>${estProspect(c)?' <span class="tag warn" title="Absent du fichier compta : compté en prospection">prospect</span>':''}${clientDuMagasin(c, YEAR)?' <span class="tag info" title="Client du magasin : commandes prises par le commercial, comptées en CA uniquement">client magasin</span>':''}</td>
         <td>${esc(whoName(c.commercial))}</td>
         <td>${esc(c.reseau||'—')}</td>
         <td class="mono">${esc(c.dept||'—')}</td>
@@ -4871,5 +4895,6 @@ if(fbsDisponible()){
 <script src="reunion.js"></script>
 <script src="portefeuilles.js"></script>
 <script src="sauvegarde.js"></script>
+<script src="fiche-client.js"></script>
 </body>
 </html>
