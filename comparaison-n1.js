@@ -3,12 +3,12 @@
    À charger APRÈS analyse-v2.js : ajoute une section en bas de l'onglet
    Pilotage → Analyse.
    • Un « client » regroupe les fiches de même nom (ex. client passé du
-     magasin à un itinérant) et les fiches reliées à la main (bouton Relier).
+     magasin à un itinérant).
    • Quand un commercial n'a pas le détail client de l'année N-1 (fichier
      compta non importé), ses clients sont marqués « Pas de détail N-1 »
      au lieu d'apparaître comme nouveaux. La section se complète seule dès
      que le fichier est importé.
-   • Seule écriture : les liens manuels, dans DB.settings.liensN1.
+   • Lecture seule : ce module n'enregistre rien.
    ===================================================================== */
 (function(){
   if(typeof VIEWS === 'undefined' || typeof VIEWS['pilotage:analyse'] !== 'function'){
@@ -28,10 +28,6 @@
   const sum = a => a.reduce((s,x) => s + (+x||0), 0);
   const sgn = n => (n > 0 ? '+' : '');
   const js = v => esc(JSON.stringify(String(v)));
-  const STOP = new Set(['sarl','sas','sa','eurl','ste','societe','ets','etablissements','et','de','du','la','le','les','des','france','sasu','groupe','sci']);
-  const mots = s => new Set(normKey(s).split(' ').filter(w => w.length > 1 && !STOP.has(w)));
-  const proche = (a, b) => { const i = [...a].filter(x => b.has(x)).length; return i / Math.max(1, Math.min(a.size, b.size)); };
-  const liens = () => ((DB.settings || {}).liensN1) || {};
 
   /* ---------- Périodes ---------- */
   function periodes(fin){
@@ -62,8 +58,6 @@
     const parNom = {};
     DB.clients.forEach(c => { const k = c.nomKey || normKey(c.nom); (parNom[k] = parNom[k] || []).push(c.id); });
     Object.values(parNom).forEach(l => l.slice(1).forEach(id => union(l[0], id)));
-    const L = liens();
-    Object.entries(L).forEach(([a, b]) => union(a, b));
     const grp = {};
     DB.clients.forEach(c => { const r = find(c.id); (grp[r] = grp[r] || []).push(c); });
     const cov = couverture(per.P, per.yP);
@@ -82,10 +76,8 @@
       else if(!caN) statut = 'perdu';
       else { const v = (caN - caP) / caP * 100; statut = v > 5 ? 'hausse' : v < -5 ? 'baisse' : 'stable'; }
       const actives = f.filter(x => x.n || x.p);
-      const ids = new Set(fiches.map(c => c.id));
-      const lie = Object.entries(L).some(([a, b]) => ids.has(a) || ids.has(b));
       out.push({id: main.id, nom: main.nom, com, fiches: actives.map(x => x.c), caN, caP, ecart: caN - caP,
-        var: caP > 0 ? (caN - caP) / caP * 100 : null, statut, incomplet: incomplet && caP > 0, fusion: actives.length > 1, lie,
+        var: caP > 0 ? (caN - caP) / caP * 100 : null, statut, incomplet: incomplet && caP > 0, fusion: actives.length > 1,
         coms: (() => {   /* commercial(aux) en N-1 → en N */
           const de = [...new Set(f.filter(x => x.p).map(x => whoName(commercialDe(x.c, per.yP))))];
           const a = [...new Set(f.filter(x => x.n).map(x => whoName(commercialDe(x.c, per.yN))))];
@@ -153,57 +145,19 @@
       <div class="card-h" style="flex-wrap:wrap;gap:8px;padding:0;margin-bottom:8px"><span class="hint">${liste.length} client${liste.length>1?'s':''}${N1.statut ? ' · filtre : ' + LBL[N1.statut] + ' <a href="#" onclick="n1Set(\'statut\',\'\');return false">(retirer)</a>' : ''}</span>
         <input placeholder="Rechercher un client…" value="${esc(N1.q)}" style="width:200px" onchange="n1Set('q',this.value)"></div>
       <div class="tw" style="max-height:560px;overflow:auto"><table><thead><tr>
-        ${th('client','Client')}${N1.com ? '' : th('com','Commercial')}${th('p', per.yP, 'num')}${th('n', per.yN, 'num')}${th('ecart','Écart','num')}${th('var','Var.')}<th>Statut</th><th></th></tr></thead><tbody>
+        ${th('client','Client')}${N1.com ? '' : th('com','Commercial')}${th('p', per.yP, 'num')}${th('n', per.yN, 'num')}${th('ecart','Écart','num')}${th('var','Var.')}<th>Statut</th></tr></thead><tbody>
         ${liste.length ? liste.slice(0,500).map(r => `<tr>
-          <td>${esc(r.nom)}${r.fusion ? ` <span class="tag mute" title="${esc(r.fiches.map(c => c.nom + ' (' + whoName(c.commercial) + ')').join(' + '))}">${r.fiches.length} fiches</span>` : ''}${r.lie ? ' <span class="tag info">relié</span>' : ''}${r.incomplet ? ' <span class="tag warn" title="Une partie du N-1 peut manquer">N-1 partiel</span>' : ''}</td>
+          <td>${esc(r.nom)}${r.fusion ? ` <span class="tag mute" title="${esc(r.fiches.map(c => c.nom + ' (' + whoName(c.commercial) + ')').join(' + '))}">${r.fiches.length} fiches</span>` : ''}${r.incomplet ? ' <span class="tag warn" title="Une partie du N-1 peut manquer">N-1 partiel</span>' : ''}</td>
           ${N1.com ? '' : `<td>${esc(r.coms.join(' → '))}</td>`}
           <td class="num">${eur(r.caP)}</td><td class="num">${eur(r.caN)}</td>
           <td class="num" style="color:var(${r.ecart>=0?'--ok':'--bad'},inherit);font-weight:600">${sgn(r.ecart)}${eur(r.ecart)}</td>
-          <td>${vTag(r.var)}</td><td>${tagS(r.statut)}</td>
-          <td>${r.lie ? `<button class="btn ghost sm" onclick="n1Delier(${js(r.id)})">Délier</button>` : (r.statut === 'sansdetail' || r.statut === 'nouveau' || r.statut === 'perdu') ? `<button class="btn ghost sm" onclick="n1Relier(${js(r.id)})">Relier</button>` : ''}</td></tr>`).join('')
-          : `<tr><td colspan="8" class="hint" style="text-align:center;padding:14px">Aucun client</td></tr>`}
+          <td>${vTag(r.var)}</td><td>${tagS(r.statut)}</td></tr>`).join('')
+          : `<tr><td colspan="7" class="hint" style="text-align:center;padding:14px">Aucun client</td></tr>`}
       </tbody></table></div>
       ${liste.length > 500 ? `<p class="hint">500 premiers affichés sur ${liste.length} : l'export Excel contient tout.</p>` : ''}
-      <p class="hint" style="margin-bottom:0">Les fiches de même nom sont additionnées (client passé du magasin à un itinérant). « Relier » associe deux fiches au nom différent ; le lien est enregistré avec les données.</p>
+      <p class="hint" style="margin-bottom:0">Les fiches de même nom sont additionnées (client passé du magasin à un itinérant).</p>
     </div>`;
   }
-
-  /* ---------- Relier / délier deux fiches ---------- */
-  window.n1Relier = (id, filtre) => {
-    const a = window.__N1_LAST; if(!a) return;
-    const r = a.rows.find(x => x.id === id); if(!r) return;
-    const mine = new Set(r.fiches.map(c => c.id)), mt = mots(r.nom);
-    const q = normKey(filtre || '');
-    const cands = DB.clients.filter(c => !mine.has(c.id)).map(c => {
-      const p = sum(a.per.P.map(m => caClientMois(c, m))), n = sum(a.per.N.map(m => caClientMois(c, m)));
-      return {c, p, n, s: proche(mt, mots(c.nom))};
-    }).filter(x => (r.caP ? x.n > 0 : x.p > 0) && (!q || normKey(x.c.nom).includes(q)))
-      .sort((x, y) => (y.s - x.s) || ((r.caP ? y.n : y.p) - (r.caP ? x.n : x.p))).slice(0, 25);
-    openModal(`
-      <div class="card-h"><div><div class="eyebrow">Relier une fiche à</div><h3 style="margin:2px 0">${esc(r.nom)}</h3></div><button class="btn ghost sm" onclick="closeModal()">✕</button></div>
-      <p class="hint">Choisis la fiche qui correspond au même client ${r.caP ? 'en ' + a.per.yN : 'en ' + a.per.yP} (par exemple sa fiche Magasin). Les plus ressemblantes sont en haut.</p>
-      <input placeholder="Chercher un autre nom…" value="${esc(filtre||'')}" onchange="n1Relier(${js(id)}, this.value)" style="width:100%;margin-bottom:10px">
-      <div class="tw" style="max-height:420px;overflow:auto"><table><thead><tr><th>Fiche</th><th>Commercial</th><th class="num">${a.per.yP}</th><th class="num">${a.per.yN}</th><th></th></tr></thead><tbody>
-        ${cands.length ? cands.map(x => `<tr><td>${esc(x.c.nom)}</td><td>${esc(whoName(x.c.commercial))}</td><td class="num">${eur(x.p)}</td><td class="num">${eur(x.n)}</td>
-          <td><button class="btn sm" onclick="n1Lier(${js(id)}, ${js(x.c.id)})">Relier</button></td></tr>`).join('') : '<tr><td colspan="5" class="hint" style="text-align:center;padding:14px">Aucune fiche trouvée</td></tr>'}
-      </tbody></table></div>`);
-  };
-  window.n1Lier = (a, b) => {
-    DB.settings = DB.settings || {};
-    DB.settings.liensN1 = Object.assign({}, DB.settings.liensN1 || {}, {[a]: b});
-    try{ save(); toast('Fiches reliées', 'ok'); }catch(e){}
-    closeModal(); render(); setTimeout(() => document.getElementById('n1Sec')?.scrollIntoView({block:'start'}), 40);
-  };
-  window.n1Delier = id => {
-    const a = window.__N1_LAST; if(!a) return;
-    const r = a.rows.find(x => x.id === id); if(!r) return;
-    const ids = new Set(DB.clients.filter(c => r.fiches.some(f => f.id === c.id) || c.id === id).map(c => c.id));
-    const L = Object.assign({}, liens());
-    Object.keys(L).forEach(k => { if(ids.has(k) || ids.has(L[k])) delete L[k]; });
-    DB.settings.liensN1 = L;
-    try{ save(); toast('Lien supprimé', 'ok'); }catch(e){}
-    render(); setTimeout(() => document.getElementById('n1Sec')?.scrollIntoView({block:'start'}), 40);
-  };
 
   /* ---------- Export Excel (liste filtrée) ---------- */
   window.n1Export = () => {
@@ -212,7 +166,7 @@
       'Client': r.nom, 'Commercial': r.coms.join(' → '), 'Fiches': r.fiches.map(c => c.nom).join(' + '),
       ['CA ' + a.per.yP]: Math.round(r.caP), ['CA ' + a.per.yN]: Math.round(r.caN), 'Écart €': Math.round(r.ecart),
       'Variation %': r.var === null ? '' : Math.round(r.var * 10) / 10, 'Statut': LBL[r.statut],
-      'Remarque': [r.incomplet ? 'N-1 partiel' : '', r.lie ? 'relié à la main' : ''].filter(Boolean).join(', ')}));
+      'Remarque': r.incomplet ? 'N-1 partiel' : ''}));
     const nom = 'comparaison-' + a.per.yN + '-' + a.per.yP + '-' + a.per.N[a.per.N.length-1] + '.xlsx';
     if(typeof XLSX === 'undefined'){ toast('Export Excel indisponible', 'bad'); return; }
     const ws = XLSX.utils.json_to_sheet(data), wb = XLSX.utils.book_new();
