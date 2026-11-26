@@ -990,20 +990,109 @@ function rdvMois(com, mk){
   }, 0);
 }
 
+/* ---------- Jours ouvrés (lundi → vendredi, jours fériés français exclus) ---------- */
+function paquesDe(y){
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+  const h = (19*a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+  const l = (32 + 2*e + 2*i - h - k) % 7, m = Math.floor((a + 11*h + 22*l) / 451);
+  const mois = Math.floor((h + l - 7*m + 114) / 31), jour = ((h + l - 7*m + 114) % 31) + 1;
+  return new Date(y, mois - 1, jour);
+}
+const FERIES_CACHE = {};
+function joursFeries(y){
+  if(FERIES_CACHE[y]) return FERIES_CACHE[y];
+  const p = paquesDe(y);
+  const dec = n => isoLocal(new Date(p.getFullYear(), p.getMonth(), p.getDate() + n));
+  return FERIES_CACHE[y] = new Set([y+'-01-01', dec(1), y+'-05-01', y+'-05-08', dec(39), dec(50),
+    y+'-07-14', y+'-08-15', y+'-11-01', y+'-11-11', y+'-12-25']);
+}
+function estOuvre(d){ const j = d.getDay(); return j !== 0 && j !== 6 && !joursFeries(d.getFullYear()).has(isoLocal(d)); }
+/* Jours ouvrés entre deux dates ISO, bornes comprises. */
+function joursOuvres(deb, fin){
+  if(!deb || !fin || fin < deb) return 0;
+  const [y1,m1,d1] = deb.split('-').map(Number), [y2,m2,d2] = fin.split('-').map(Number);
+  const a = new Date(y1, m1-1, d1), b = new Date(y2, m2-1, d2);
+  let n = 0;
+  for(const d = a; d <= b; d.setDate(d.getDate() + 1)) if(estOuvre(d)) n++;
+  return n;
+}
+function finDeMois(mk){ const [y,m] = String(mk).split('-').map(Number); return mk + '-' + String(new Date(y, m, 0).getDate()).padStart(2,'0'); }
+function ouvresMois(mk){ return joursOuvres(mk + '-01', finDeMois(mk)); }
+function ouvresAu(mk, arrete){ const f = finDeMois(mk); return joursOuvres(mk + '-01', arrete > f ? f : arrete); }
+/* Part du mois écoulée à une date, en jours ouvrés (0 → 1). */
+function fracMois(mk, arrete){ const t = ouvresMois(mk); return t ? Math.min(1, ouvresAu(mk, arrete) / t) : 1; }
+const fjCourt = iso => iso ? iso.slice(8,10) + '/' + iso.slice(5,7) : '—';
+
+/* ---------- Saisie hebdomadaire ----------
+   Chaque saisie est un CUMUL : CA réalisé du 1er du mois jusqu'à la date d'arrêté.
+   Seule la saisie la plus récente du mois compte ; les précédentes sont remplacées. */
 function semainesOf(com, mk){
   return DB.semaines.filter(s => s.commercial === com && weekToMonth(s.week) === mk);
 }
+/* Date à laquelle le cumul est arrêté : saisie explicite, sinon jour d'enregistrement,
+   sinon vendredi de la semaine. Toujours ramenée dans le mois de la semaine. */
+function arreteSaisie(s){
+  const mk = weekToMonth(s.week), deb = mk + '-01', fin = finDeMois(mk);
+  const ven = semaineBornes(s.week).ven;
+  let d = s.arrete || (s.timestamp ? isoLocal(new Date(s.timestamp)) : ven);
+  if(d < deb) d = ven < deb ? deb : ven;
+  if(d > fin) d = fin;
+  return d;
+}
+function ordreSaisie(a, b){
+  return arreteSaisie(a).localeCompare(arreteSaisie(b)) || String(a.week).localeCompare(String(b.week)) || (+a.timestamp||0) - (+b.timestamp||0);
+}
+function saisieRetenue(com, mk){
+  const sem = semainesOf(com, mk);
+  return sem.length ? sem.slice().sort(ordreSaisie)[sem.length - 1] : null;
+}
+
+/* ---------- Chiffres officiels (compta) ----------
+   Un import compta couvre le 1er du mois jusqu'à sa date d'arrêté (= jour de l'import).
+   · arrêté au dernier jour du mois ou après  → définitif
+   · arrêté avant la fin du mois                → cumul partiel, traité comme une saisie
+   · saisi à la main dans « Chiffres officiels » → définitif
+   · import sans date à partir de nov. 2026     → non compté (import incomplet d'avant cette règle)
+   · marqué « exclu »                            → non compté */
+const OFF_DATE_DEPUIS = '2026-11';
 function officiel(com, mk){
   const o = DB.officiels[mk];
   return (o && o[com]) ? o[com] : null;
 }
+function etatOfficiel(o, mk){
+  if(!o) return null;
+  if(o.exclu) return 'exclu';
+  if(o.manuel) return 'definitif';
+  if(o.arrete) return o.arrete >= finDeMois(mk) ? 'definitif' : 'partiel';
+  return mk >= OFF_DATE_DEPUIS ? 'nondate' : 'definitif';
+}
+/* CA et marge retenus pour un mois, avec leur source et leur date d'arrêté. */
+function chiffreMois(com, mk){
+  const off = officiel(com, mk), etat = etatOfficiel(off, mk);
+  const sai = suiviSeul(com) ? null : saisieRetenue(com, mk);   /* magasin : imports compta uniquement */
+  const fin = finDeMois(mk);
+  if(etat === 'definitif'){
+    return {ca: off.ca != null ? +off.ca : (sai ? +sai.ca||0 : 0),
+            marge: off.marge != null ? +off.marge : (sai ? +sai.marge||0 : 0),
+            source:'officiel', arrete: fin, frac: 1, etatOff: etat};
+  }
+  const cands = [];
+  if(etat === 'partiel' && off.ca != null) cands.push({ca:+off.ca, marge: off.marge != null ? +off.marge : 0, source:'compta', arrete: off.arrete, rang:1});
+  if(sai) cands.push({ca:+sai.ca||0, marge:+sai.marge||0, source:'saisie', arrete: arreteSaisie(sai), week: sai.week, rang:0});
+  if(!cands.length) return {ca:0, marge:0, source:'vide', arrete:null, frac:0, etatOff: etat};
+  cands.sort((a,b) => a.arrete.localeCompare(b.arrete) || a.rang - b.rang);
+  const r = cands[cands.length - 1];
+  return {...r, frac: fracMois(mk, r.arrete), etatOff: etat};
+}
 function stats(com, mk){
   const sem = semainesOf(com, mk);
-  const off = officiel(com, mk);
-  const caSaisi    = sem.reduce((s,x)=>s+(+x.ca||0),0);
-  const margeSaisi = sem.reduce((s,x)=>s+(+x.marge||0),0);
-  const ca    = off && off.ca    != null ? +off.ca    : caSaisi;
-  const marge = off && off.marge != null ? +off.marge : margeSaisi;
+  const cm = chiffreMois(com, mk);
+  const sai = saisieRetenue(com, mk);
+  const caSaisi    = sai ? +sai.ca || 0 : 0;
+  const margeSaisi = sai ? +sai.marge || 0 : 0;
+  const off = cm.source === 'officiel';
+  const ca = cm.ca, marge = cm.marge;
 
   const vis = DB.visites.filter(v => v.commercial===com && monthKey(v.date)===mk);
   const commandes = vis.filter(v => v.resultat === 'Commande').length;
@@ -1012,7 +1101,7 @@ function stats(com, mk){
 
   return {
     mk, com, ca, marge, caSaisi, margeSaisi,
-    officiel: !!off,
+    officiel: off, source: cm.source, arrete: cm.arrete, frac: cm.frac, etatOff: cm.etatOff,
     txmarge: ca ? marge/ca*100 : 0,
     visites: vis.length, commandes, devis, nouveaux,
     rdv: rdvMois(com, mk),
@@ -1324,14 +1413,43 @@ function fmtCrit(c, v){
 Tableau de bord — trajectoire vers l'objectif annuel (CA uniquement)
 ========================================================================== */
 function joursDuMois(mk){ const [y,m] = String(mk).split('-').map(Number); return new Date(y, m, 0).getDate(); }
-/* Projection du mois en cours : chiffre officiel s'il existe, sinon semaines saisies extrapolées au mois entier. */
+/* Projection du mois en cours.
+   Chiffre officiel définitif → tel quel. Sinon le dernier cumul connu (saisie hebdo ou
+   import compta partiel) est proratisé : cumul ÷ jours ouvrés écoulés × jours ouvrés du mois. */
 function projectionMois(com, mk){
   const s = stats(com, mk);
-  if(s.officiel) return {proj:s.ca, base:'officiel', faites:0, total:0};
-  const total = weeksOfMonth(mk).length;
-  const faites = semainesOf(com, mk).length;
-  if(!faites || !total) return {proj:null, base:'vide', faites:0, total};
-  return {proj: s.caSaisi / Math.min(faites, total) * total, base:'semaines', faites, total};
+  const total = ouvresMois(mk);
+  if(s.source === 'officiel') return {proj:s.ca, base:'officiel', faites:total, total, frac:1, arrete:s.arrete};
+  if(s.source === 'vide') return {proj:null, base:'vide', faites:0, total, frac:0, arrete:null};
+  const faites = ouvresAu(mk, s.arrete);
+  if(!faites) return {proj:null, base:'vide', faites:0, total, frac:0, arrete:s.arrete};
+  return {proj: s.frac >= 1 ? s.ca : s.ca / faites * total, base:s.source, faites, total, frac:s.frac, arrete:s.arrete};
+}
+/* Statut d'un chiffre officiel dans l'écran « Chiffres officiels ». */
+function badgeOfficiel(o, mk){
+  const e = etatOfficiel(o && (o.ca != null || o.marge != null) ? o : null, mk);
+  if(!e) return '';
+  const t = e === 'partiel' ? `<span class="tag info">provisoire au ${fjCourt(o.arrete)}</span>`
+    : e === 'nondate' ? '<span class="tag warn">incomplet · non compté</span>'
+    : e === 'exclu' ? '<span class="tag warn">exclu</span>'
+    : o.manuel ? '<span class="tag mute">saisi à la main</span>' : o.arrete ? `<span class="tag ok">définitif · import du ${fjCourt(o.arrete)}</span>` : '';
+  return t ? `<div style="margin-top:4px">${t}</div>` : '';
+}
+/* Badge de la source du CA d'un mois (stats). */
+function tagSource(st){
+  if(st.source === 'officiel') return '<span class="tag ok">officiel</span>';
+  if(st.source === 'compta') return `<span class="tag info">compta au ${fjCourt(st.arrete)}</span>`;
+  if(st.source === 'saisie') return `<span class="tag mute">saisie au ${fjCourt(st.arrete)}</span>`;
+  if(st.etatOff === 'nondate' || st.etatOff === 'exclu') return '<span class="tag warn">import non compté</span>';
+  return '<span class="tag mute">—</span>';
+}
+/* Libellé de la source de la projection du mois en cours. */
+function libProj(k){
+  if(k.base === 'officiel') return 'chiffre officiel';
+  if(k.base === 'mixte') return 'données partielles, complétées au rythme';
+  if(k.base === 'prorata') return 'cumuls à date proratisés aux jours ouvrés';
+  const src = k.base === 'compta' ? 'import compta' : 'saisie';
+  return `${src} au ${fjCourt(k.arrete)} · ${k.faites}/${k.total} j. ouvrés`;
 }
 /* Série mensuelle d'un commercial : réel sur les mois clos, projection sur le mois en cours, rythme des 3 derniers mois ensuite. */
 function trajCom(com, y){
@@ -1345,15 +1463,18 @@ function trajCom(com, y){
   const caP = monthsOfYear(String(+y - 1)).map(m => stats(com, m).ca);
   const der3 = caM.slice(Math.max(0, nbClos - 3), nbClos);
   const rythme = der3.length ? der3.reduce((s,v)=>s+v,0) / der3.length : 0;
-  let proj = null, base = null, faites = 0, total = 0;
-  if(etat === 'cours'){ const p = projectionMois(com, ms[idx-1]); proj = p.proj; base = p.base; faites = p.faites; total = p.total; }
+  let proj = null, base = null, faites = 0, total = 0, frac = 0, arrete = null;
+  if(etat === 'cours'){ const p = projectionMois(com, ms[idx-1]); proj = p.proj; base = p.base; faites = p.faites; total = p.total; frac = p.frac; arrete = p.arrete; }
   const serie = ms.map((m,i) => {
     if(i < nbClos) return caM[i];
     if(etat === 'futur') return 0;
     if(i === idx - 1) return Math.max(proj !== null ? proj : rythme, caM[i]);
     return rythme;
   });
-  return {y, etat, idx, nbClos, caM, obM, caP, serie, proj, base, faites, total, rythme, objAn: +objAn(com, y).ca || 0};
+  /* Objectif et CA N-1 du mois en cours ramenés à la même date d'arrêté que le réalisé. */
+  const objCours = etat === 'cours' ? obM[idx-1] * frac : 0;
+  const pCours   = etat === 'cours' ? caP[idx-1] * frac : 0;
+  return {y, etat, idx, nbClos, caM, obM, caP, serie, proj, base, faites, total, frac, arrete, objCours, pCours, rythme, objAn: +objAn(com, y).ca || 0};
 }
 function trajFusion(list, y){
   const t0 = list[0];
@@ -1362,8 +1483,10 @@ function trajFusion(list, y){
   return {y, etat:t0.etat, idx:t0.idx, nbClos:t0.nbClos,
     caM:sum('caM'), obM:sum('obM'), caP:sum('caP'), serie:sum('serie'),
     proj: t0.etat === 'cours' ? sum('serie')[t0.idx-1] : null,
-    base: bases.every(b=>b==='vide') ? 'vide' : bases.every(b=>b==='officiel') ? 'officiel' : bases.some(b=>b==='vide') ? 'mixte' : 'semaines',
-    faites:0, total:0,
+    base: bases.every(b=>b==='vide') ? 'vide' : bases.every(b=>b==='officiel') ? 'officiel' : bases.some(b=>b==='vide') ? 'mixte' : 'prorata',
+    faites:0, total:0, arrete:null,
+    objCours: list.reduce((s,t)=>s+(t.objCours||0),0),
+    pCours: list.reduce((s,t)=>s+(t.pCours||0),0),
     rythme: list.reduce((s,t)=>s+t.rythme,0),
     objAn: list.reduce((s,t)=>s+t.objAn,0)};
 }
@@ -1374,7 +1497,7 @@ function trajKpi(t){
   const caCours = t.etat === 'cours' ? t.caM[t.idx-1] : 0;
   const realise = cumClos + caCours;
   let objDate = t.obM.slice(0, t.nbClos).reduce((s,v)=>s+v,0);
-  if(t.etat === 'cours') objDate += t.obM[t.idx-1] * new Date().getDate() / joursDuMois(ms[t.idx-1]);
+  if(t.etat === 'cours') objDate += t.objCours != null ? t.objCours : t.obM[t.idx-1] * new Date().getDate() / joursDuMois(ms[t.idx-1]);
   const moisRestants = t.etat === 'cours' ? 12 - t.idx + 1 : (t.etat === 'futur' ? 12 : 0);
   const besoin = moisRestants ? Math.max(0, objAnnuel - cumClos) / moisRestants : 0;
   const atterrissage = t.serie.reduce((s,v)=>s+v,0);
@@ -1421,6 +1544,8 @@ function dashObjectifHtml(yN, yP){
   const dateTxt = k => !k.objAnnuel ? '—' : k.deja ? 'atteint le ' + fj(k.date)
     : k.date ? 'vers le ' + fj(k.date) : (k.etat === 'clos' ? 'non atteint' : 'pas avant le 31 déc.');
   const ligne = (dt, dd, small) => `<div><dt>${dt}</dt><dd>${dd}${small ? `<small>${small}</small>` : ''}</dd></div>`;
+  /* Le réalisé du mois en cours est un cumul arrêté à une date : l'objectif est comparé à cette même date. */
+  const aDate = k => !enCours ? 'à date' : k.arrete ? 'au ' + fjCourt(k.arrete) + ' (date du dernier chiffre)' : 'à la date du dernier chiffre de chacun';
   const panneau = (nom, k, equipe) => {
     const a = k.objAnnuel ? k.realise / k.objAnnuel * 100 : 0;
     const rep = k.objAnnuel ? Math.min(100, k.objDate / k.objAnnuel * 100) : 0;
@@ -1429,11 +1554,11 @@ function dashObjectifHtml(yN, yP){
       ? ligne('Projection ' + moisCours, '<span class="tag mute">en attente de saisie</span>', 'estimé au rythme : ' + eur(k.serie[k.idx-1]))
       : ligne('Projection ' + moisCours, eur(k.proj),
           (k.obM[k.idx-1] ? pct(k.proj / k.obM[k.idx-1] * 100) + " de l'objectif du mois · " : '') +
-          (k.base === 'officiel' ? 'chiffre officiel' : k.base === 'mixte' ? 'saisie partielle, complétée au rythme' : k.total ? k.faites + '/' + k.total + ' sem. saisies' : 'extrapolé des semaines saisies'))) : '';
+          libProj(k))) : '';
     return `<div class="traj${equipe ? ' eq' : ''}">
       <div class="traj-h"><h4>${esc(nom)}</h4>${k.objAnnuel ? `<span class="tag ${a>=100?'ok':a>=rep?'info':'warn'}">${pct(a)} de l'objectif</span>` : ''}</div>
-      ${k.objAnnuel ? `<div class="jauge" title="Réalisé ${pct(a)} · attendu au ${fj(new Date())} : ${pct(rep)}"><i style="width:${Math.min(100,a)}%"></i><b style="left:${rep}%"></b></div>
-      <div class="hint" style="margin-top:6px">Repère orange : ${pct(rep)} attendu ${enCours ? 'au ' + fj(new Date()) : 'à date'}</div>` : `<div class="note warn">Aucun objectif annuel ${yN} saisi.</div>`}
+      ${k.objAnnuel ? `<div class="jauge" title="Réalisé ${pct(a)} · attendu ${aDate(k)} : ${pct(rep)}"><i style="width:${Math.min(100,a)}%"></i><b style="left:${rep}%"></b></div>
+      <div class="hint" style="margin-top:6px">Repère orange : ${pct(rep)} attendu ${aDate(k)}</div>` : `<div class="note warn">Aucun objectif annuel ${yN} saisi.</div>`}
       <dl class="trajl">
         ${ligne('Objectif annuel', eur(k.objAnnuel))}
         ${ligne('Réalisé à date', eur(k.realise))}
@@ -1463,11 +1588,14 @@ function dashObjectifHtml(yN, yP){
     <td class="num mono" style="color:var(--ink3)">${k.moyPrec3 !== null ? eur(k.moyPrec3) + '<div class="hint">' + (k.txPrec3 !== null ? pct(k.txPrec3) + " de l'objectif" : '') + '</div>' : '—'}</td>
     <td>${tend(k)}</td></tr>`;
   const nbM = ke.etat === 'cours' ? ke.idx : ke.etat === 'clos' ? 12 : 0;
+  /* Mois en cours : le cumul à date est comparé au CA ${yP} ramené à la même date d'arrêté. */
+  const pCmp = (k, i) => enCours && i === k.idx-1 ? (k.pCours || 0) : k.caP[i];
+  const pSum = k => k.caP.slice(0, nbM).reduce((s,v,i)=>s+pCmp(k,i),0);
   const ecartCell = (n, p) => `<td class="num mono">${eur(n)}</td><td class="num mono" style="color:var(--${n-p>=0?'ok':'bad'})">${p || n ? eurSigne(n - p) : '—'}<div>${evoTag(evo(n, p))}</div></td>`;
   const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
     <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
-    ${ks.map(k => ecartCell(k.caM[i], k.caP[i])).join('')}
-    ${ecartCell(ke.caM[i], ke.caP[i])}</tr>`).join('');
+    ${ks.map(k => ecartCell(k.caM[i], pCmp(k, i))).join('')}
+    ${ecartCell(ke.caM[i], pCmp(ke, i))}</tr>`).join('');
   const sumTo = (a) => a.slice(0, nbM).reduce((s,v)=>s+v,0);
   return `
 <div class="card">
@@ -1479,7 +1607,7 @@ function dashObjectifHtml(yN, yP){
     ${coms.map((c,i) => panneau(c.nom, ks[i], false)).join('')}
     ${panneau(nomEq, ke, true)}
   </div>
-  <p class="hint" style="margin-top:12px">Projection : réel sur les mois clos, mois en cours extrapolé à partir des semaines saisies (ou du chiffre officiel), puis moyenne des 3 derniers mois clos pour la suite de l'année.</p>
+  <p class="hint" style="margin-top:12px">Projection : réel sur les mois clos (chiffres officiels), mois en cours à partir du dernier cumul connu — saisie hebdo ou import compta partiel, du 1er du mois à sa date d'arrêté — proratisé aux jours ouvrés (fériés exclus), puis moyenne des 3 derniers mois clos pour la suite de l'année. L'avance ou le retard compare le réalisé à l'objectif ramené à cette même date.</p>
 </div>
 
 <div class="card">
@@ -1504,7 +1632,7 @@ function dashObjectifHtml(yN, yP){
     </thead>
     <tbody>${ecartRows || `<tr><td colspan="${coms.length*2+3}" class="hint">Aucun mois à comparer.</td></tr>`}</tbody>
     <tfoot><tr style="border-top:2px solid var(--line2)"><td style="font-weight:600">Cumul</td>
-      ${ks.map(k => ecartCell(sumTo(k.caM), sumTo(k.caP))).join('')}${ecartCell(sumTo(ke.caM), sumTo(ke.caP))}</tr></tfoot>
+      ${ks.map(k => ecartCell(sumTo(k.caM), pSum(k))).join('')}${ecartCell(sumTo(ke.caM), pSum(ke))}</tr></tfoot>
   </table></div>
 </div>`;
 }
@@ -1545,7 +1673,8 @@ function dashSuiviHtml(yN, yP){
   const moy = (a, i, j) => { const n = Math.max(0, j - Math.max(0,i)); return n ? somme(a, i, j) / n : null; };
   const enrichir = k => {
     const nc = k.nbClos;
-    const pDate = somme(k.caP, 0, nc) + (enCours ? k.caP[k.idx-1] * new Date().getDate() / joursDuMois(ms[k.idx-1]) : 0);
+    /* CA N-1 au même stade : mois clos + part du mois en cours écoulée à la date du dernier import compta. */
+    const pDate = somme(k.caP, 0, nc) + (enCours ? (k.pCours || 0) : 0);
     return {...k,
       closN: somme(k.caM, 0, nc), closP: somme(k.caP, 0, nc),
       m3: moy(k.caM, nc-3, nc), m3P: moy(k.caP, nc-3, nc), m3Prec: moy(k.caM, nc-6, nc-3),
@@ -1562,10 +1691,10 @@ function dashSuiviHtml(yN, yP){
     const a = k.totalP ? k.realise / k.totalP * 100 : 0;
     const rep = k.totalP ? Math.min(100, k.pDate / k.totalP * 100) : 0;
     const projMois = enCours ? (k.base === 'vide'
-      ? ligne('Projection ' + moisCours, '<span class="tag mute">en attente de saisie</span>', 'estimé au rythme : ' + eur(k.serie[k.idx-1]))
+      ? ligne('Projection ' + moisCours, '<span class="tag mute">en attente de l\'import compta</span>', 'estimé au rythme : ' + eur(k.serie[k.idx-1]))
       : ligne('Projection ' + moisCours, eur(k.proj),
           (k.caP[k.idx-1] ? evoTag(evo(k.proj, k.caP[k.idx-1])) + ' vs ' + monthLabel(yP + ms[k.idx-1].slice(4)) + ' · ' : '') +
-          (k.base === 'officiel' ? 'chiffre officiel' : k.base === 'mixte' ? 'saisie partielle, complétée au rythme' : k.total ? k.faites + '/' + k.total + ' sem. saisies' : 'extrapolé des semaines saisies'))) : '';
+          libProj(k))) : '';
     return `<div class="traj${equipe ? ' eq' : ''}">
       <div class="traj-h"><h4>${esc(nom)}</h4>${tend(k)}</div>
       ${k.totalP ? `<div class="jauge" title="${pct(a)} du CA ${yP} déjà réalisé · au même stade en ${yP} : ${pct(rep)}"><i style="width:${Math.min(100,a)}%"></i><b style="left:${rep}%"></b></div>
@@ -1582,11 +1711,14 @@ function dashSuiviHtml(yN, yP){
     </div>`;
   };
   const nbM = ke.etat === 'cours' ? ke.idx : ke.etat === 'clos' ? 12 : 0;
+  /* Mois en cours : le cumul à date est comparé au CA ${yP} ramené à la même date d'arrêté. */
+  const pCmp = (k, i) => enCours && i === k.idx-1 ? (k.pCours || 0) : k.caP[i];
+  const pSum = k => k.caP.slice(0, nbM).reduce((s,v,i)=>s+pCmp(k,i),0);
   const ecartCell = (n, p) => `<td class="num mono">${eur(n)}</td><td class="num mono" style="color:var(--${n-p>=0?'ok':'bad'})">${p || n ? eurSigne(n - p) : '—'}<div>${evoTag(evo(n, p))}</div></td>`;
   const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
     <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
-    ${ks.map(k => ecartCell(k.caM[i], k.caP[i])).join('')}
-    ${ecartCell(ke.caM[i], ke.caP[i])}</tr>`).join('');
+    ${ks.map(k => ecartCell(k.caM[i], pCmp(k, i))).join('')}
+    ${ecartCell(ke.caM[i], pCmp(ke, i))}</tr>`).join('');
   const sumTo = a => a.slice(0, nbM).reduce((s,v)=>s+v,0);
   const rowT = (nom, k, eq) => `<tr${eq ? ' class="tr-eq"' : ''}>
     <td><strong>${esc(nom)}</strong></td>
@@ -1606,7 +1738,7 @@ function dashSuiviHtml(yN, yP){
     ${coms.map((c,i) => panneau(c.nom, E[i], false)).join('')}
     ${coms.length > 1 ? panneau(nomEq, EE, true) : ''}
   </div>
-  <p class="hint" style="margin-top:12px">Sans objectif, la référence est l'année ${yP} : repère orange = part du CA ${yP} qui était faite au même stade. Projection : réel sur les mois clos, mois en cours extrapolé, puis moyenne des 3 derniers mois clos.</p>
+  <p class="hint" style="margin-top:12px">Sans objectif, la référence est l'année ${yP} : repère orange = part du CA ${yP} qui était faite au même stade. Chiffres du magasin : imports compta uniquement. Un import fait en cours de mois est un cumul du 1er à sa date, proratisé aux jours ouvrés ; un import incomplet non daté n'est pas compté. Ensuite, moyenne des 3 derniers mois clos.</p>
 </div>
 
 <div class="card">
@@ -1626,7 +1758,7 @@ function dashSuiviHtml(yN, yP){
     </thead>
     <tbody>${ecartRows || `<tr><td colspan="${coms.length*2+3}" class="hint">Aucun mois à comparer.</td></tr>`}</tbody>
     <tfoot><tr style="border-top:2px solid var(--line2)"><td style="font-weight:600">Cumul</td>
-      ${ks.map(k => ecartCell(sumTo(k.caM), sumTo(k.caP))).join('')}${ecartCell(sumTo(ke.caM), sumTo(ke.caP))}</tr></tfoot>
+      ${ks.map(k => ecartCell(sumTo(k.caM), pSum(k))).join('')}${ecartCell(sumTo(ke.caM), pSum(ke))}</tr></tfoot>
   </table></div>
 </div>`;
 }
@@ -1777,7 +1909,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
           <td>${evoTag(evo(r.n.ca, r.pv.ca))}</td>
           <td class="num mono">${r.n.nouveaux}</td>
           ${avecObj ? `<td class="num mono" style="color:var(--acc2);font-weight:600">${ss ? '—' : eur(r.p.total)}</td>` : ''}
-          <td><span class="tag ${r.s.officiel?'ok':'mute'}">${r.s.officiel?'officiel':r.s.semaines+' sem.'}</span></td>
+          <td>${tagSource(r.s)}</td>
         </tr>`;}).join('')}</tbody>
       <tfoot><tr style="border-top:2px solid var(--line2)">
         <td style="font-weight:600">Total</td>
@@ -2187,7 +2319,7 @@ VIEWS['performance:semaine'] = () => {
   <div class="card">
     <div class="card-h"><div><div class="eyebrow">Une seule saisie alimente le pilotage et les primes</div><h3>Chiffres de la semaine</h3></div></div>
     <div class="grid g3">
-      <div><label class="f">Commercial</label><select id="sCom" onchange="majRdvAuto()">${DB.commerciaux.map(c=>`<option value="${c.id}" ${c.id===WHO?'selected':''}>${esc(c.nom)}</option>`).join('')}</select></div>
+      <div><label class="f">Commercial</label><select id="sCom" onchange="majRdvAuto()">${DB.commerciaux.filter(c=>!suiviSeul(c)).map(c=>`<option value="${c.id}" ${c.id===WHO?'selected':''}>${esc(c.nom)}</option>`).join('')}</select></div>
       <div><label class="f">Semaine</label><input type="week" id="sWeek" value="${w}" onchange="majRdvAuto()"></div>
       <div><label class="f">Chiffre d'affaires (€)</label><input type="number" id="sCa" placeholder="0" step="10"></div>
     </div>
@@ -2198,6 +2330,10 @@ VIEWS['performance:semaine'] = () => {
         <div id="sRdvAuto" class="card" style="background:var(--bg2);padding:10px 12px;margin:0"></div>
       </div>
       <div><label class="f">Nouveaux clients ouverts</label><input type="number" id="sNvx" placeholder="0"></div>
+    </div>
+    <div class="grid g3" style="margin-top:12px">
+      <div><label class="f">Cumul arrêté au</label><input type="date" id="sArrete" value="${isoLocal(new Date())}"></div>
+      <div style="grid-column:span 2"><div class="note" style="margin:0">Saisissez le <strong>CA cumulé du 1er du mois jusqu'à cette date</strong>. La nouvelle saisie remplace automatiquement la précédente du même mois : plus besoin de l'effacer. Le tableau de bord la proratise aux jours ouvrés pour projeter le mois.</div></div>
     </div>
     <div class="note" style="margin-top:14px">Les RDV qualifiés, les visites, le taux de transformation et les clients ouverts sont comptés automatiquement à partir des visites importées. Vous ne saisissez ici que le CA et la marge, qui ne remontent pas des comptes rendus.</div>
     <div class="btnrow" style="margin-top:14px"><button class="btn" onclick="saveSemaine()">Enregistrer la semaine</button></div>
@@ -2222,16 +2358,17 @@ VIEWS['performance:semaine'] = () => {
   <div class="card">
     <div class="card-h"><h3>Semaines saisies</h3><span class="hint">${rows.length} enregistrement${rows.length>1?'s':''}</span></div>
     ${rows.length?`<div class="tw"><table>
-      <thead><tr><th>Semaine</th><th>Mois</th><th>Commercial</th><th class="num">CA</th><th class="num">Marge</th><th class="num">Taux</th><th class="num">RDV qualifiés</th><th></th></tr></thead>
-      <tbody>${rows.slice(0,120).map(s=>`<tr>
+      <thead><tr><th>Semaine</th><th>Mois</th><th>Commercial</th><th>Cumul au</th><th class="num">CA cumulé</th><th class="num">Marge</th><th class="num">Taux</th><th class="num">RDV qualifiés</th><th></th></tr></thead>
+      <tbody>${rows.slice(0,120).map(s=>{ const ret = saisieRetenue(s.commercial, weekToMonth(s.week)); const ok = ret && ret.id === s.id; return `<tr${ok?'':' style="opacity:.55"'}>
         <td class="mono"><strong>${esc(s.week)}</strong></td>
         <td>${monthLabel(weekToMonth(s.week))}</td>
         <td>${esc(whoName(s.commercial))}</td>
+        <td>${fjCourt(arreteSaisie(s))} ${ok ? '<span class="tag ok">retenue</span>' : '<span class="tag mute">remplacée</span>'}</td>
         <td class="num mono">${eur(s.ca)}</td>
         <td class="num mono">${eur(s.marge)}</td>
         <td class="num mono">${s.ca?pct(s.marge/s.ca*100):'—'}</td>
         <td class="num mono">${s.rdvForce!=null&&s.rdvForce!==''?`${s.rdvForce} <span class="tag warn">forcé</span>`:`${rdvSemaine(s.commercial,s.week)} <span class="tag ok">auto</span>`}</td>
-        <td><button class="btn ghost sm" onclick="delSemaine('${s.id}')">Supprimer</button></td></tr>`).join('')}</tbody></table></div>`
+        <td><button class="btn ghost sm" onclick="delSemaine('${s.id}')">Supprimer</button></td></tr>`;}).join('')}</tbody></table></div>`
     :emptyState('◫','Aucune semaine saisie.')}
   </div>`;
 };
@@ -2239,6 +2376,15 @@ function saveSemaine(){
   const com = document.getElementById('sCom').value;
   const week = document.getElementById('sWeek').value;
   if(!week){ toast('Choisissez une semaine.','bad'); return; }
+  if(suiviSeul(com)){ toast('Le magasin est suivi uniquement par les imports compta.','bad'); return; }
+  const mk = weekToMonth(week);
+  const elA = document.getElementById('sArrete');
+  let arrete = elA && elA.value ? elA.value : isoLocal(new Date());
+  if(arrete < mk + '-01'){
+    toast(`Le ${fjCourt(arrete)} est avant ${monthLabel(mk)}, mois de la semaine ${week} : choisissez la semaine du mois concerné.`, 'bad');
+    return;
+  }
+  if(arrete > finDeMois(mk)) arrete = finDeMois(mk);   /* saisie faite après la fin du mois : cumul du mois complet */
   const rec = {
     id: uid(), commercial: com, week,
     ca: parseFloat(document.getElementById('sCa').value)||0,
@@ -2248,12 +2394,25 @@ function saveSemaine(){
       const el = document.getElementById('sRdvForce');
       return el && el.value !== '' ? parseInt(el.value) : null;
     })(),
-    source:'manuel', timestamp: Date.now()
+    arrete, source:'manuel', timestamp: Date.now()
   };
   const i = DB.semaines.findIndex(s => s.commercial===com && s.week===week && s.source!=='importe');
   if(i>=0){ rec.id = DB.semaines[i].id; DB.semaines[i] = rec; }
   else DB.semaines.push(rec);
-  save(); toast('Semaine ' + week + ' enregistrée','ok'); render();
+  /* La saisie est un cumul : elle remplace les saisies plus anciennes du même mois.
+     Une saisie qui porte un RDV forcé est conservée pour ce compteur, mais n'entre plus dans le CA. */
+  const remplacees = [];
+  const autres = semainesOf(com, mk).filter(s => s.id !== rec.id && ordreSaisie(s, rec) < 0);
+  autres.forEach(s => {
+    remplacees.push(s.week);
+    if(s.rdvForce == null || s.rdvForce === '') DB.semaines = DB.semaines.filter(x => x.id !== s.id);
+  });
+  const plusRecente = saisieRetenue(com, mk);
+  save();
+  if(plusRecente && plusRecente.id !== rec.id)
+    toast(`Semaine ${week} enregistrée — une saisie plus récente (${plusRecente.week}, au ${fjCourt(arreteSaisie(plusRecente))}) reste retenue pour ${monthLabel(mk)}.`, 'bad');
+  else toast(`Semaine ${week} enregistrée — cumul au ${fjCourt(arrete)}${remplacees.length ? ', remplace ' + [...new Set(remplacees)].join(', ') : ''}`, 'ok');
+  render();
 }
 function delSemaine(id){ DB.semaines = DB.semaines.filter(s=>s.id!==id); save(); toast('Semaine supprimée'); render(); }
 
@@ -2300,13 +2459,14 @@ VIEWS['performance:officiels'] = () => {
     <div class="card-h"><div><div class="eyebrow">Priorité sur la saisie hebdomadaire</div><h3>Chiffres officiels ${y}</h3></div>
       <button class="btn sm" onclick="saveOfficiels()">Enregistrer</button></div>
     <div class="note warn">Dès qu'un chiffre officiel est renseigné pour un mois, il remplace le cumul des semaines saisies dans tous les calculs, y compris les primes. Laissez vide pour revenir à la saisie hebdomadaire.</div>
+    <div class="note" style="margin-top:10px">Un <strong>import compta fait avant la fin du mois</strong> est un cumul partiel (du 1er à la date d'import) : il reste provisoire et il est proratisé aux jours ouvrés, comme une saisie hebdo. Il devient définitif avec l'import de fin de mois. Un chiffre tapé ici à la main est considéré comme définitif. Les imports incomplets non datés (avant cette règle, à partir de novembre 2026) ne sont pas comptés.</div>
     <div class="tw" style="margin-top:14px"><table>
       <thead><tr><th>Mois</th>${ACTIFS().map(c=>`<th class="num">${esc(c.nom)} — CA</th><th class="num">${esc(c.nom)} — Marge</th>`).join('')}<th>Écart / saisie</th></tr></thead>
       <tbody>${ms.map(m=>{
         const ecart = ACTIFS().reduce((s,c)=>{const st=stats(c.id,m);const o=officiel(c.id,m);return s+(o&&o.ca!=null?(+o.ca - st.caSaisi):0);},0);
         return `<tr><td><strong>${monthLabel(m)}</strong></td>
         ${ACTIFS().map(c=>{const o=officiel(c.id,m)||{};
-          return `<td class="num"><input type="number" style="text-align:right;padding:6px 8px" id="of_ca_${c.id}_${m}" value="${o.ca!=null?o.ca:''}" placeholder="${Math.round(stats(c.id,m).caSaisi)||''}"></td>
+          return `<td class="num"><input type="number" style="text-align:right;padding:6px 8px" id="of_ca_${c.id}_${m}" value="${o.ca!=null?o.ca:''}" placeholder="${Math.round(stats(c.id,m).caSaisi)||''}">${badgeOfficiel(o, m)}</td>
                   <td class="num"><input type="number" style="text-align:right;padding:6px 8px" id="of_mg_${c.id}_${m}" value="${o.marge!=null?o.marge:''}" placeholder="${Math.round(stats(c.id,m).margeSaisi)||''}"></td>`;}).join('')}
         <td class="num mono ${ecart<0?'':''}" style="color:${ecart<0?'var(--bad)':ecart>0?'var(--ok)':'var(--ink3)'}">${ecart?eur(ecart):'—'}</td></tr>`;
       }).join('')}</tbody></table></div>
@@ -2320,7 +2480,10 @@ function saveOfficiels(){
       const mg = document.getElementById('of_mg_'+c.id+'_'+m).value;
       if(ca==='' && mg===''){ if(DB.officiels[m]) delete DB.officiels[m][c.id]; return; }
       DB.officiels[m] = DB.officiels[m] || {};
-      DB.officiels[m][c.id] = {ca: ca===''?null:parseFloat(ca), marge: mg===''?null:parseFloat(mg)};
+      const nv = {ca: ca===''?null:parseFloat(ca), marge: mg===''?null:parseFloat(mg)};
+      const ex = DB.officiels[m][c.id];
+      /* Chiffre inchangé : on garde sa date d'arrêté / son statut d'import. Modifié à la main : définitif. */
+      DB.officiels[m][c.id] = ex && ex.ca === nv.ca && ex.marge === nv.marge ? ex : {...nv, manuel:true};
     });
     if(DB.officiels[m] && !Object.keys(DB.officiels[m]).length) delete DB.officiels[m];
   });
@@ -4049,6 +4212,7 @@ function chargerCompta(input){
           mois: detecteMois(file.name) || curMonth(),
           moisNum: (detecteMois(file.name) || curMonth()).slice(5,7),
           annee: '',   /* l'année n'est jamais devinée : elle est choisie ou saisie à l'import */
+          arrete: isoLocal(new Date()),   /* le relevé couvre le 1er du mois jusqu'au jour de l'import */
           detecteCom: !!detecteCommercial(file.name),
           detecteMois: lu.type === 'recap' ? true : !!MOIS_FR.find(m => normKey(file.name).includes(m)),
           ...lu
@@ -4092,6 +4256,16 @@ function comptaEffectif(x){
     taux: ca > 0 ? (ca-achat)/ca*100 : null,
     clients: new Set(periodes.flatMap(p => p.lignes.map(l => normKey(l.nom)))).size};
 }
+/* Relevé partiel (arrêté avant la fin du mois) ou définitif. */
+function statutArreteCompta(x){
+  const e = comptaEffectif(x);
+  if(!e || !x.arrete) return '';
+  const mois = e.type === 'recap' ? (e.periodes.length ? e.periodes[e.periodes.length-1].mois : null) : e.mois;
+  if(!mois) return '';
+  if(x.arrete < mois + '-01') return '<div><span class="tag bad">avant le mois</span></div>';
+  return x.arrete >= finDeMois(mois) ? '<div><span class="tag ok">définitif</span></div>'
+    : `<div><span class="tag info">${monthLabel(mois).split(' ')[0]} provisoire</span></div>`;
+}
 function comptaRetirer(i){ COMPTA.splice(i,1); render(); }
 function comptaVider(){ COMPTA = []; render(); }
 
@@ -4101,6 +4275,10 @@ function validerCompta(){
     toast(`Choisissez l'année de ${sansAnnee.length > 1 ? sansAnnee.length + ' relevés' : '« ' + sansAnnee[0].fichier + ' »'} avant d'importer.`, 'bad');
     return;
   }
+  const sansDate = COMPTA.filter(x => !x.erreur && x.lignes.length && !/^\d{4}-\d{2}-\d{2}$/.test(String(x.arrete||'')));
+  if(sansDate.length){ toast("Indiquez la date d'arrêté (jour de l'extraction compta) de chaque relevé.", 'bad'); return; }
+  const avant = COMPTA.map(comptaEffectif).filter(x => x && x.type !== 'recap' && x.arrete < x.mois + '-01');
+  if(avant.length){ toast(`« ${avant[0].fichier} » : la date d'arrêté est antérieure au mois du relevé (${monthLabel(avant[0].mois)}).`, 'bad'); return; }
   const prets = COMPTA.filter(x => !x.erreur && x.lignes.length).map(comptaEffectif)
     .filter(x => x.type !== 'recap' || x.periodes.length);
   if(!prets.length){ toast('Aucun relevé exploitable pour l\'année choisie.', 'bad'); return; }
@@ -4135,7 +4313,8 @@ function validerCompta(){
         DB.officiels[p.mois] = DB.officiels[p.mois] || {};
         DB.officiels[p.mois][x.commercial] = {
           ca: Math.round(p.ca * 100) / 100,
-          marge: Math.round((p.ca - p.achat) * 100) / 100
+          marge: Math.round((p.ca - p.achat) * 100) / 100,
+          arrete: x.arrete
         };
         moisTraites++;
       });
@@ -4148,7 +4327,8 @@ function validerCompta(){
       const ex = DB.officiels[x.mois][x.commercial] || {};
       DB.officiels[x.mois][x.commercial] = {
         ca: Math.round((x.total != null ? x.total : x.somme) * 100) / 100,
-        marge: ex.marge != null ? ex.marge : null
+        marge: ex.marge != null ? ex.marge : null,
+        arrete: x.arrete
       };
       moisTraites++;
     }
@@ -4200,10 +4380,10 @@ VIEWS['data:compta'] = () => {
   <div class="card">
     <div class="card-h"><h3>À importer</h3><span class="tag info">${COMPTA.length} relevé${COMPTA.length>1?'s':''}</span></div>
     <div class="tw"><table>
-      <thead><tr><th>Fichier</th><th>Nature</th><th>Commercial</th><th>Période</th><th class="num">Clients</th><th class="num">CA</th><th class="num">Marge</th><th>Contrôle</th><th></th></tr></thead>
+      <thead><tr><th>Fichier</th><th>Nature</th><th>Commercial</th><th>Période</th><th>Chiffre arrêté au</th><th class="num">Clients</th><th class="num">CA</th><th class="num">Marge</th><th>Contrôle</th><th></th></tr></thead>
       <tbody>${COMPTA.map((x,i)=>{
         if(x.erreur) return `<tr><td><strong>${esc(x.fichier)}</strong></td>
-          <td colspan="7"><span class="tag bad">illisible</span> <span class="hint">${esc(x.erreur)}</span></td>
+          <td colspan="8"><span class="tag bad">illisible</span> <span class="hint">${esc(x.erreur)}</span></td>
           <td><button class="btn ghost sm" onclick="comptaRetirer(${i})">Retirer</button></td></tr>`;
         const recap = x.type === 'recap';
         const e = comptaEffectif(x) || x;
@@ -4224,6 +4404,7 @@ VIEWS['data:compta'] = () => {
             : `<select style="width:auto;min-width:130px" onchange="comptaMaj(${i},'moisNum',this.value)">
                 ${moisNoms.map((m,k)=>{const v=String(k+1).padStart(2,'0');return `<option value="${v}" ${v===x.moisNum?'selected':''}>${m}</option>`;}).join('')}
               </select> ${champAnnee(x,i)}${x.detecteMois?'':' <span class="tag warn">mois à confirmer</span>'}${comptaAnneeOk(x)?'':' <span class="tag warn">année à choisir</span>'}`}</td>
+          <td><input type="date" value="${x.arrete||''}" onchange="comptaMaj(${i},'arrete',this.value)" style="width:auto">${statutArreteCompta(x)}</td>
           <td class="num mono">${recap ? e.clients : x.lignes.length}</td>
           <td class="num mono">${eur(e.total != null ? e.total : e.somme)}</td>
           <td class="num mono">${recap ? pct(e.taux) : '<span style="color:var(--ink3)">—</span>'}</td>
@@ -4270,6 +4451,7 @@ VIEWS['data:compta'] = () => {
     ${COMPTA.map(comptaEffectif).some(x=>x && x.type!=='recap' && DB.officiels[x.mois] && DB.officiels[x.mois][x.commercial])
       ? `<div class="note warn" style="margin-top:14px">Un chiffre officiel existe déjà pour au moins un de ces mois. L'import le remplacera par le total du relevé ; la marge saisie, elle, est conservée.</div>` : ''}
 
+    <div class="note" style="margin-top:14px"><strong>Date d'arrêté</strong> : le relevé couvre le chiffre du 1er du mois jusqu'à cette date (par défaut, aujourd'hui). Si elle tombe avant la fin du mois, le chiffre reste <strong>provisoire</strong> et il est proratisé aux jours ouvrés dans le tableau de bord, jusqu'à l'import de fin de mois.</div>
     <div class="note" style="margin-top:14px">L'import écrase le CA du mois pour chaque client concerné plutôt que de l'additionner : réimporter un relevé corrigé ne crée donc pas de double comptage.</div>
 
     <div class="btnrow" style="margin-top:16px">
