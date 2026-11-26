@@ -1129,6 +1129,23 @@ function ytd(com, y, m){
   }
   return {ca, marge, visites, nouveaux, commandes};
 }
+/* Part du mois couverte par le chiffre retenu (1 = mois complet). Sert à comparer
+   un mois en cours (cumul à date) à l'année précédente au même stade, et non au mois entier. */
+function fracStade(com, mk){
+  const st = stats(com, mk);
+  if(st.source === 'officiel') return 1;
+  if(st.source === 'vide') return mk >= curMonth() ? 0 : 1;
+  return st.frac;
+}
+/* CA (et marge) N-1 du même mois, ramené au stade du mois mkRef. */
+function caN1Stade(com, mkRef){ return stats(com, (+mkRef.slice(0,4) - 1) + mkRef.slice(4)).ca * fracStade(com, mkRef); }
+/* Cumul N-1 janvier → mois m, le dernier mois ramené au stade de mkRef. */
+function ytdStade(com, y, m, mkRef){
+  const r = ytd(com, y, m);
+  const f = fracStade(com, mkRef);
+  if(f < 1){ const last = stats(com, y + '-' + String(m).padStart(2,'0')); r.ca -= last.ca * (1 - f); r.marge -= last.marge * (1 - f); }
+  return r;
+}
 function evo(a, b){ return (b && b !== 0) ? (a-b)/b*100 : null; }
 function evoTag(v, suffixe){
   if(v === null) return `<span class="tag mute">—</span>`;
@@ -1769,7 +1786,7 @@ VIEWS['pilotage:dashboard'] = () => {
   const yN = YEAR, yP = String(+YEAR - 1);
   const rows = ACTIFS().map(c => ({
     c, s: stats(c.id, mk), o: objMois(c.id, mk), p: calcPrime(c.id, mk),
-    n: ytd(c.id, yN, moisIdx), pv: ytd(c.id, yP, moisIdx)
+    n: ytd(c.id, yN, moisIdx), pv: ytdStade(c.id, yP, moisIdx, mk)
   }));
   const tot = rows.reduce((a,r)=>({
     ca:a.ca+r.s.ca, marge:a.marge+r.s.marge, obj:a.obj+(+r.o.ca||0),
@@ -1785,18 +1802,24 @@ VIEWS['pilotage:dashboard'] = () => {
   const avecObj = rObj.length > 0, mixte = avecObj && rObj.length < rows.length;
   const caObj = rObj.reduce((s,r)=>s+r.s.ca,0), cumObj = rObj.reduce((s,r)=>s+r.n.ca,0);
   const atteinte = tot.obj ? caObj/tot.obj*100 : 0;
+  /* Mois en cours : la couleur juge le rythme, c'est-à-dire le réalisé face à l'objectif ramené à la date du dernier chiffre. */
+  const objStade = rObj.reduce((s,r)=>s+(+r.o.ca||0)*fracStade(r.c.id, mk),0);
+  const rythmeMois = objStade ? caObj/objStade*100 : atteinte;
   const atteinteAn = objAnnuel ? cumObj/objAnnuel*100 : 0;
   const clientsActifs = DB.clients.filter(cl => ACTIFS().some(c => c.id === commercialDe(cl, mk.slice(0,4))) && caClientMois(cl, mk) > 0).length;
 const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
 
   const moisN = ACTIFS().reduce((s,c)=>s+stats(c.id, mk).ca, 0);
-  const moisP = ACTIFS().reduce((s,c)=>s+stats(c.id, yP + mk.slice(4)).ca, 0);
+  const moisP = ACTIFS().reduce((s,c)=>s+caN1Stade(c.id, mk), 0);
+  /* Mois en cours non clos : la comparaison N-1 se fait au même stade (jours ouvrés). */
+  const partiel = ACTIFS().some(c => fracStade(c.id, mk) < 1);
 
   const mkCom = (window.__comMonth && window.__comMonth.slice(0,4)===yN) ? window.__comMonth : mk;
   const moisIdxCom = +mkCom.slice(5,7);
+  const partielCom = ACTIFS().some(c => fracStade(c.id, mkCom) < 1);
   const rowsCom = ACTIFS().map(c => ({
     c, s: stats(c.id, mkCom), o: objMois(c.id, mkCom), p: calcPrime(c.id, mkCom),
-    n: ytd(c.id, yN, moisIdxCom), pv: ytd(c.id, yP, moisIdxCom)
+    n: ytd(c.id, yN, moisIdxCom), pv: ytdStade(c.id, yP, moisIdxCom, mkCom)
   }));
   const totCom = rowsCom.reduce((a,r)=>({
     ca:a.ca+r.s.ca, marge:a.marge+r.s.marge, obj:a.obj+(+r.o.ca||0),
@@ -1832,15 +1855,16 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
   <div class="card" style="background:linear-gradient(135deg,var(--panel),var(--panel2))">
     <div class="eyebrow">Exercice ${yN}${yN!==todayISO().slice(0,4)?' · consultation':''}</div>
     <h2 style="font-size:27px;margin-bottom:4px">${monthLabel(mk)}</h2>
-    <p class="hint">Chiffres consolidés à partir de la saisie hebdomadaire, des chiffres officiels et des visites importées. Les comparaisons portent sur la même période de ${yP}, de janvier à ${monthLabel(mk).split(' ')[0]}.</p>
+    <p class="hint">Chiffres consolidés à partir de la saisie hebdomadaire, des chiffres officiels et des visites importées. Les comparaisons portent sur la même période de ${yP}, de janvier à ${monthLabel(mk).split(' ')[0]}${partiel ? ' — le mois en cours étant un cumul à date, il est comparé à ' + yP + ' au même stade (jours ouvrés)' : ''}.</p>
   </div>
 
   <div class="grid g4" style="margin-top:16px">
-    <div class="kpi ${!avecObj?'':atteinte>=100?'ok':atteinte>=80?'':'bad'}">
+    <div class="kpi ${!avecObj?'':rythmeMois>=100?'ok':rythmeMois>=80?'':'bad'}">
       <div class="lab">CA du mois</div><div class="val">${eur(tot.ca)}</div>
       ${avecObj ? `<div class="sub">objectif ${mixte?'itinérants ':''}${eur(tot.obj)} · ${pct(atteinte)}${mixte?' · magasin '+eur(tot.ca-caObj):''}</div>
-      <div class="bar"><i class="${atteinte>=100?'ok':atteinte<80?'bad':''}" style="width:${Math.min(100,atteinte)}%"></i></div>` : `<div class="sub">suivi sans objectif</div>`}
-      <div class="sub" style="margin-top:7px">${evoTag(evo(moisN, moisP))} vs ${monthLabel(yP + mk.slice(4))}</div>
+      <div class="bar"><i class="${rythmeMois>=100?'ok':rythmeMois<80?'bad':''}" style="width:${Math.min(100,atteinte)}%"></i></div>
+      ${partiel && objStade ? `<div class="sub" style="margin-top:5px">attendu à date ${eur(objStade)} · rythme ${pct(rythmeMois)}</div>` : ''}` : `<div class="sub">suivi sans objectif</div>`}
+      <div class="sub" style="margin-top:7px">${moisP || moisN ? evoTag(evo(moisN, moisP)) : '<span class="tag mute">—</span>'} vs ${monthLabel(yP + mk.slice(4))}${partiel ? ' au même stade' : ''}</div>
     </div>
     <div class="kpi info"><div class="lab">Marge</div><div class="val">${eur(tot.marge)}</div>
       <div class="sub">taux ${tot.ca?pct(tot.marge/tot.ca*100):'—'}</div></div>
@@ -1862,11 +1886,11 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
     <div class="grid g4">
       <div class="kpi ${(evo(cum.ca,cum.caP)||0)>=0?'ok':'bad'}">
         <div class="lab">CA cumulé</div><div class="val">${eur(cum.ca)}</div>
-        <div class="sub">${yP} : ${eur(cum.caP)}</div>
+        <div class="sub">${yP}${partiel ? ' au même stade' : ''} : ${eur(cum.caP)}</div>
         <div class="sub" style="margin-top:6px">${evoTag(evo(cum.ca, cum.caP))}</div>
       </div>
       <div class="kpi info"><div class="lab">Marge cumulée</div><div class="val">${eur(cum.marge)}</div>
-        <div class="sub">${yP} : ${eur(cum.margeP)}</div>
+        <div class="sub">${yP}${partiel ? ' au même stade' : ''} : ${eur(cum.margeP)}</div>
         <div class="sub" style="margin-top:6px">${evoTag(evo(cum.marge, cum.margeP))}</div></div>
       <div class="kpi"><div class="lab">Visites cumulées</div><div class="val">${num(cum.vis)}</div>
         <div class="sub">${yP} : ${num(cum.visP)}</div>
@@ -1886,7 +1910,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
       <div style="display:flex;align-items:center;gap:10px">
         <select onchange="window.__comMonth=this.value;render();" style="background:var(--panel2);color:var(--ink);border:1px solid var(--line2);border-radius:8px;padding:4px 10px;font-size:13px">${moisOptions}</select>
         <button class="btn sm" onclick="pdfEvolutionCommerciaux()" style="margin-right:2px">Export PDF</button>
-        <span class="hint">cumul et évolution sur l'exercice</span>
+        <span class="hint">cumul et évolution sur l'exercice${partielCom ? ` · ${yP} pris au même stade pour ${monthLabel(mkCom).split(' ')[0]}` : ''}</span>
       </div>
     </div>
     <div class="tw"><table>
@@ -1895,7 +1919,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
         <th class="num">Nvx clients</th>${avecObj?'<th class="num">Prime</th>':''}<th>Source</th></tr></thead>
       <tbody>${rowsCom.map(r=>{
         const a = r.o.ca ? r.s.ca/r.o.ca*100 : 0;
-        const ss = suiviSeul(r.c), caMP = stats(r.c.id, yP + mkCom.slice(4)).ca;
+        const ss = suiviSeul(r.c), caMP = caN1Stade(r.c.id, mkCom);
         return `<tr>
           <td><strong>${esc(r.c.nom)}</strong>${ss && mixte ? ' <span class="tag mute">magasin</span>' : ''}</td>
           <td class="num mono">${eur(r.s.ca)}</td>
@@ -1916,7 +1940,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
         <td class="num mono" style="font-weight:600">${eur(totCom.ca)}</td>
         ${avecObj ? `<td class="num mono" style="color:var(--ink3)">${eur(totCom.obj)}</td>
         <td><span class="tag ${atteinteCom>=100?'ok':atteinteCom>=80?'warn':'bad'}">${pct(atteinteCom)}</span></td>`
-        : (() => { const tP = rowsCom.reduce((s,r)=>s+stats(r.c.id, yP + mkCom.slice(4)).ca,0);
+        : (() => { const tP = rowsCom.reduce((s,r)=>s+caN1Stade(r.c.id, mkCom),0);
             return `<td class="num mono" style="color:var(--ink3)">${eur(tP)}</td><td>${evoTag(evo(totCom.ca, tP))}</td>`; })()}
         <td class="num mono" style="font-weight:600">${eur(cumCom.ca)}</td>
         <td class="num mono" style="color:var(--ink3)">${eur(cumCom.caP)}</td>
