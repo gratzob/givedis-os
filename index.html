@@ -791,8 +791,10 @@ function render(){
   const fn = VIEWS[SPACE + ':' + TAB];
   document.getElementById('main').innerHTML =
     `<div class="view on">${fn ? fn() : '<div class="card"><div class="empty"><p>Écran introuvable.</p></div></div>'}</div>`;
+  /* Un seul dessin des graphiques en attente : deux rendus rapprochés dessinaient deux fois sur le même canevas. */
+  clearTimeout(window.__afterT);
   const after = AFTER[SPACE + ':' + TAB];
-  if(after) setTimeout(after, 30);
+  if(after) window.__afterT = setTimeout(() => { Object.values(CHARTS).forEach(c => { try{ c.destroy(); }catch(e){} }); CHARTS = {}; after(); }, 30);
 }
 
 const VIEWS = {};
@@ -1750,7 +1752,7 @@ function dashSuiviHtml(yN, yP){
   const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
     <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
     ${ks.map(k => ecartCell(k.caM[i], pCmp(k, i))).join('')}
-    ${ecartCell(ke.caM[i], pCmp(ke, i))}</tr>`).join('');
+    ${coms.length > 1 ? ecartCell(ke.caM[i], pCmp(ke, i)) : ''}</tr>`).join('');
   const sumTo = a => a.slice(0, nbM).reduce((s,v)=>s+v,0);
   const rowT = (nom, k, eq) => `<tr${eq ? ' class="tr-eq"' : ''}>
     <td><strong>${esc(nom)}</strong></td>
@@ -1785,12 +1787,12 @@ function dashSuiviHtml(yN, yP){
   <div class="card-h"><div><div class="eyebrow">Magasin · mois par mois</div><h3>Écart avec ${yP}</h3></div></div>
   <div class="tw"><table>
     <thead>
-      <tr><th rowspan="2">Mois</th>${coms.map(c => `<th colspan="2" class="num" style="text-align:center">${esc(c.nom)}</th>`).join('')}<th colspan="2" class="num" style="text-align:center">${nomEq}</th></tr>
-      <tr>${coms.concat([{}]).map(() => `<th class="num">CA ${yN}</th><th class="num">Écart vs ${yP}</th>`).join('')}</tr>
+      <tr><th rowspan="2">Mois</th>${coms.map(c => `<th colspan="2" class="num" style="text-align:center">${esc(c.nom)}</th>`).join('')}${coms.length > 1 ? `<th colspan="2" class="num" style="text-align:center">${nomEq}</th>` : ''}</tr>
+      <tr>${(coms.length > 1 ? coms.concat([{}]) : coms).map(() => `<th class="num">CA ${yN}</th><th class="num">Écart vs ${yP}</th>`).join('')}</tr>
     </thead>
     <tbody>${ecartRows || `<tr><td colspan="${coms.length*2+3}" class="hint">Aucun mois à comparer.</td></tr>`}</tbody>
     <tfoot><tr style="border-top:2px solid var(--line2)"><td style="font-weight:600">Cumul</td>
-      ${ks.map(k => ecartCell(sumTo(k.caM), pSum(k))).join('')}${ecartCell(sumTo(ke.caM), pSum(ke))}</tr></tfoot>
+      ${ks.map(k => ecartCell(sumTo(k.caM), pSum(k))).join('')}${coms.length > 1 ? ecartCell(sumTo(ke.caM), pSum(ke)) : ''}</tr></tfoot>
   </table></div>
 </div>`;
 }
@@ -5127,14 +5129,14 @@ if(fbsDisponible()){
   else renderShell();
 }
 </script>
-<script src="lecture.js?v=20261127c"></script>
-<script src="analyse.js?v=20261127c"></script>
-<script src="analyse-v2.js?v=20261127c"></script>
-<script src="comparaison-n1.js?v=20261127c"></script>
-<script src="reunion.js?v=20261127c"></script>
-<script src="portefeuilles.js?v=20261127c"></script>
-<script src="sauvegarde.js?v=20261127c"></script>
-<script src="fiche-client.js?v=20261127c"></script>
-<script src="historique.js?v=20261127c"></script>
+<script src="lecture.js?v=20261127d"></script>
+<script src="analyse.js?v=20261127d"></script>
+<script src="analyse-v2.js?v=20261127d"></script>
+<script src="comparaison-n1.js?v=20261127d"></script>
+<script src="reunion.js?v=20261127d"></script>
+<script src="portefeuilles.js?v=20261127d"></script>
+<script src="sauvegarde.js?v=20261127d"></script>
+<script src="fiche-client.js?v=20261127d"></script>
+<script src="historique.js?v=20261127d"></script>
 </body>
 </html>
