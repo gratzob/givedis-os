@@ -59,6 +59,12 @@
   const finMois = mk => { const [y,m] = mk.split('-').map(Number); return mk + '-' + String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2,'0'); };
 
   /* Jours ouvrés (lundi-vendredi, hors jours fériés français). */
+  /* Historique compta importé (Données › Historique compta) : chaque client est analysé
+     en entier (toutes ses fiches + la part du fichier global) sur la fiche qui le porte
+     sur l'exercice ; les autres fiches du même nom ne sont pas comptées deux fois. */
+  const GRP_ON = () => !!(window.HIST && HIST.actif && HIST.actif());
+  const caA = (c, m, y) => GRP_ON() ? HIST.caGroupe(c, m, y || m.slice(0,4)) : caClientMois(c, m);
+
   const JO_CACHE = {};
   function paques(y){
     const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),
@@ -86,7 +92,7 @@
   /* Mois pour lesquels un fichier compta a été importé. */
   function moisDetail(){
     const s = new Set();
-    DB.clients.forEach(c => Object.entries(c.caByMonth || {}).forEach(([m,v]) => { if(v !== null && v !== '') s.add(m); }));
+    DB.clients.concat(GRP_ON() ? HIST.virtuelles() : []).forEach(c => Object.entries(c.caByMonth || {}).forEach(([m,v]) => { if(v !== null && v !== '') s.add(m); }));
     return [...s].sort();
   }
 
@@ -101,7 +107,7 @@
     const H = rangeM(addM(M,-23), M);
     /* Équipe entière, mois par mois : sert au coefficient de saison */
     const team = {};
-    const teamCA = x => { if(team[x] === undefined) team[x] = K.has(x) ? sum(DB.clients.map(c => caClientMois(c, x))) : null; return team[x]; };
+    const teamCA = x => { if(team[x] === undefined) team[x] = K.has(x) ? sum(DB.clients.map(c => caA(c, x, M.slice(0,4)))) : null; return team[x]; };
     const yoyOK = rec1.every(x => K.has(x));
     let saison = null;
     if(rec1.every(x => K.has(x)) && prev1.every(x => K.has(x))){
@@ -131,6 +137,7 @@
 
   /* Taux de marge d'un client sur un mois, en signalant s'il est estimé. */
   function taux(c, m, X){
+    if(GRP_ON()){ const g = HIST.tauxGroupe(c, m, X.M.slice(0,4)); if(g) return g; }
     const o = typeof origineTaux === 'function' ? origineTaux(c, m) : 'mois';
     if(o !== 'repli') return {t: +tauxClient(c, m) || 0, repli:false};
     const k = (c.commercial||'') + '|' + m.slice(0,4);
@@ -143,7 +150,7 @@
   /* ---------- Statut « ancienne méthode » (pour comparer) ---------- */
   function statutV1(c, X){
     const M = X.M, seuil = (window.AN && +window.AN.seuil) || 15;
-    const caM = m => caClientMois(c, m);
+    const caM = m => caA(c, m, X.M.slice(0,4));
     const cRec = sum(X.recV1.map(caM)), cPrev = sum(X.prevV1.map(caM));
     const yearM = monthsOfYear(M.slice(0,4)).filter(m => m <= M);
     const achats = yearM.filter(m => caM(m) > 0);
@@ -159,12 +166,13 @@
 
   /* ---------- Calcul d'un client ---------- */
   function ligne(c, X){
-    const M = X.M, K = X.K;
+    const M = X.M, K = X.K, yA = M.slice(0,4);
+    if(GRP_ON() && !HIST.estProprio(c, yA)) return null;   /* compté sur la fiche qui porte le client */
     const ser = {};
-    X.H.forEach(m => { ser[m] = K.has(m) ? caClientMois(c, m) : null; });
+    X.H.forEach(m => { ser[m] = K.has(m) ? caA(c, m, yA) : null; });
     /* Dernier achat, même au-delà de 24 mois */
     let lastBuy = null, firstBuy = null;
-    Object.entries(c.caByMonth || {}).forEach(([m,v]) => { if(m <= M && +v > 0){ if(!lastBuy || m > lastBuy) lastBuy = m; if(!firstBuy || m < firstBuy) firstBuy = m; } });
+    Object.entries(GRP_ON() ? HIST.moisGroupe(c, yA) : (c.caByMonth || {})).forEach(([m,v]) => { if(m <= M && +v > 0){ if(!lastBuy || m > lastBuy) lastBuy = m; if(!firstBuy || m < firstBuy) firstBuy = m; } });
     X.H.forEach(m => { if(ser[m] > 0){ if(!lastBuy || m > lastBuy) lastBuy = m; if(!firstBuy || m < firstBuy) firstBuy = m; } });
     if(!lastBuy) return null;                    /* jamais acheté : prospect */
     if(diffM(lastBuy, M) > 35) return null;      /* rien depuis 3 ans : hors analyse */
@@ -224,7 +232,7 @@
     const d12 = rangeM(addM(M,-11), M), p12 = rangeM(addM(M,-23), addM(M,-12));
     const ca12 = sR(d12), k12 = d12.filter(m => K.has(m)).length;
     const ca12p = sR(p12), k12p = p12.filter(m => K.has(m)).length;
-    const caPerdu = statut === 'perdu' ? sum(rangeM(addM(lastBuy,-11), lastBuy).map(m => caClientMois(c, m))) : 0;
+    const caPerdu = statut === 'perdu' ? sum(rangeM(addM(lastBuy,-11), lastBuy).map(m => caA(c, m, yA))) : 0;
 
     /* Tendance sur 12 mois (régression, CA par jour ouvré) */
     /* Pour un client qui achète par à-coups, on lisse sur son rythme (ex. trimestre) */
@@ -247,7 +255,7 @@
     const mRec = marge(X.rec), mPrev = marge(X.prev), mHist = marge(rangeM(addM(X.rec[0],-12), addM(X.rec[0],-1)));
 
     /* Visites (jusqu'à la fin de M) */
-    const vis = X.visPar[c.id] || [];
+    const vis = GRP_ON() ? HIST.fichesGroupe(c, yA).flatMap(f => X.visPar[f.id] || []).sort((a, b) => b.date.localeCompare(a.date)) : (X.visPar[c.id] || []);
     const lastVis = vis[0] || null;
     const joursVis = lastVis ? joursEntre(lastVis.date, X.refDate) : null;
     const dV = m => m + '-01';
@@ -457,7 +465,7 @@
         if(r.statut === 'perdu' || r.statut === 'nouveau') return;
         const moy = r.ca12 / Math.max(1, r.k12);
         if(moy < 100) return;
-        const fut = sum(rangeM(addM(Mb,1), addM(Mb,3)).map(m => caClientMois(r.c, m)));
+        const fut = sum(rangeM(addM(Mb,1), addM(Mb,3)).map(m => caA(r.c, m, Mb.slice(0,4))));
         const baisse = fut < 0.5 * moy * 3;
         n++; if(baisse) b++;
         const f1 = r.v1 === 'recul' || r.v1 === 'decroche';
@@ -525,7 +533,7 @@
   /* Un mois est incomplet s'il est en cours, ou si son CA fait moins de 40 % de la médiane des 6 mois d'avant. */
   function moisIncomplet(m){
     if(m >= curMonth()) return true;
-    const tot = x => sum(DB.clients.map(c => caClientMois(c, x)));
+    const tot = x => sum(DB.clients.map(c => caA(c, x)));
     const K = new Set(moisDetail());
     const av = rangeM(addM(m,-6), addM(m,-1)).filter(x => K.has(x)).map(tot);
     return av.length >= 3 && tot(m) < 0.4 * median(av);

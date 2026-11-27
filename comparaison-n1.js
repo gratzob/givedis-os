@@ -71,7 +71,9 @@
       const caN = sum(f.map(x => x.n)), caP = sum(f.map(x => x.p));
       if(!caN && !caP) return;
       const reel = f.filter(x => !x.c.__hist);
-      const main = (reel.length ? reel : f).slice().sort((a, b) => (b.n - a.n) || (b.p - a.p))[0].c;
+      let main = (reel.length ? reel : f).slice().sort((a, b) => (b.n - a.n) || (b.p - a.p))[0].c;
+      /* même propriétaire que le tableau de bord et l'Analyse (règle magasin) */
+      if(reel.length && window.HIST && HIST.actif()){ const pr = HIST.proprio(reel[0].c, per.yN); if(pr && !pr.__hist) main = pr; }
       const com = main.__hist ? '' : (commercialDe(main, per.yN) || main.commercial);
       /* N-1 incomplet si une fiche active en N appartient (en N-1) à un commercial sans détail client */
       const incomplet = !histA(per.yP) && f.some(x => x.n > 0 && !x.c.__hist && (cov[commercialDe(x.c, per.yP)] || {}).manque);
