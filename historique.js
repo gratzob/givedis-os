@@ -193,8 +193,11 @@
 
   /* Base égale (règle magasin) : quand un commercial prend une commande en yN chez un client
      qui appartient à quelqu'un d'autre (ex. client du magasin), ce CA compte pour lui en yN.
-     Pour comparer à base égale, le même montant est retiré du N-1 du propriétaire et ajouté
-     au N-1 du commercial, mois par mois (mois yN au chiffre officiel uniquement). */
+     Pour comparer à base égale, mois par mois (mois yN au chiffre officiel uniquement) :
+       • propriétaire : la commande est AJOUTÉE à son yN comparé (son N-1 reste le vrai chiffre
+         de ses clients) — clé « N|mois yN » ;
+       • commercial : la commande est ajoutée à son N-1 (son yN reste son vrai CA) — clé mois yP.
+     Liste des transferts dans out.__liste (pour retirer les doublons quand on additionne les deux). */
   var AJUST = {};
   function ajustement(yN){
     yN = String(yN);
@@ -211,7 +214,8 @@
           var m = yN + '-' + x, v = +((f.caByMonth || {})[m]) || 0; if(!v) return;
           if(!estOff(fc, m) || !estOff(own, m)) return;
           var t = tauxF(f, m), mg = t ? v * t.t / 100 : 0;
-          add(own, yP + '-' + x, -v, -mg); add(fc, yP + '-' + x, v, mg);
+          add(own, 'N|' + m, v, mg); add(fc, yP + '-' + x, v, mg);
+          (out.__liste || (out.__liste = [])).push({own: own, fc: fc, m: m, ca: v, marge: mg});
         });
       });
     });
@@ -272,7 +276,7 @@
           var fc = commercialDe(f, yN) || f.commercial, v = +((f.caByMonth || {})[mN]) || 0;
           if(fc === com) n += v;
           if(fc !== own && v && estOff(fc, mN) && estOff(own, mN)){
-            if(own === com){ p -= v; autres.push({com: fc, ca: v}); }
+            if(own === com){ n += v; autres.push({com: fc, ca: v}); }
             if(fc === com) p += v;
           }
         });
@@ -283,7 +287,15 @@
       return rows;
     },
     /* Part de l'ajustement « base égale » dans le N-1 de com (mois mP). */
-    ajustN1: function(com, mP, yN){ var a = (ajustement(yN)[com] || {})[mP]; return a ? {ca: a.ca, marge: a.marge} : {ca:0, marge:0}; }
+    ajustN1: function(com, mP, yN){ var a = (ajustement(yN)[com] || {})[mP]; return a ? {ca: a.ca, marge: a.marge} : {ca:0, marge:0}; },
+    /* Commandes des autres commerciaux chez les clients de com, ajoutées à son mois mN comparé. */
+    ajustN: function(com, mN){ var a = (ajustement(mN.slice(0,4))[com] || {})['N|' + mN]; return a ? {ca: a.ca, marge: a.marge} : {ca:0, marge:0}; },
+    /* Transferts entre personnes toutes présentes dans coms (comptés deux fois dans une somme). */
+    interne: function(coms, mN){
+      var r = {ca:0, marge:0}; ((ajustement(mN.slice(0,4)).__liste) || []).forEach(function(t){
+        if(t.m === mN && coms.indexOf(t.own) >= 0 && coms.indexOf(t.fc) >= 0){ r.ca += t.ca; r.marge += t.marge; } });
+      return r;
+    }
   };
 
   /* ---------------- Lecture du fichier ---------------- */

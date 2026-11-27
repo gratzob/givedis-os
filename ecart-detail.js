@@ -42,15 +42,26 @@
       var st = stats(com, mN), f = 1;
       try{ f = fracStade(com, mN); }catch(e){}
       frac = Math.min(frac, f);
-      tot.n += st.ca;
+      tot.n += (typeof statsC === 'function' ? statsC(com, mN) : st).ca;
       tot.p += (typeof statsN1 === 'function' ? statsN1(com, mP) : stats(com, mP)).ca * f;
       if(st.source !== 'officiel') nonDetail = true;
       (avecHist ? HIST.detailMois(com, mN) : detailSimple(com, mN)).forEach(function(r){ r.p *= f; rows.push(r); });
     });
+    /* Plusieurs personnes affichées ensemble : une commande d'un commercial chez un client d'une autre
+       personne de la liste serait comptée deux fois (chez l'un et chez l'autre) : on la retire. */
+    if(ED.coms.length > 1 && avecHist && HIST.interne){
+      var it = HIST.interne(ED.coms, mN); tot.n -= it.ca; tot.p -= it.ca * frac;
+      rows = rows.filter(function(r){ return !(r.proprio !== r.com && ED.coms.indexOf(r.proprio) >= 0); });
+      rows.forEach(function(r){
+        var dedans = r.autres.filter(function(a){ return ED.coms.indexOf(a.com) >= 0; });
+        r.n -= sum(dedans.map(function(a){ return a.ca; }));
+        r.autres = r.autres.filter(function(a){ return ED.coms.indexOf(a.com) < 0; });
+      });
+    }
     rows.forEach(function(r){
-      var a = sum(r.autres.map(function(x){ return x.ca; }));
+      /* detailMois : n du propriétaire inclut déjà les commandes des autres (« dont ») */
       if(r.proprio !== r.com){ r.pA = 0; r.nA = r.n; r.ecart = r.n - r.p; }
-      else { r.pA = r.p + a; r.nA = r.n + a; r.ecart = r.nA - r.pA; }
+      else { r.pA = r.p; r.nA = r.n; r.ecart = r.n - r.p; }
       r.var = r.proprio === r.com && r.pA ? r.ecart / r.pA * 100 : null; r.statut = statut(r);
     });
     rows.sort(function(a, b){ return Math.abs(b.ecart) - Math.abs(a.ecart); });

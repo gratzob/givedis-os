@@ -155,8 +155,9 @@
         </div></div>
 
       <div class="tw" style="margin-bottom:12px"><table><thead><tr><th>Commercial</th><th class="num">${per.yP} ${typeof perimetreConstant === 'function' && perimetreConstant(per.yP) ? 'à périmètre constant' : '(chiffres du mois)'}</th><th class="num">${per.yN}</th><th>Évolution</th><th>Détail client ${per.yP}</th></tr></thead><tbody>
-        ${comsActifs.filter(c => !N1.com || c.id === N1.com).map(c => { const v = cov[c.id] || {}; const n = sum(per.N.map(m => { try{ return stats(c.id, m).ca; }catch(e){ return 0; } }));
-          return `<tr><td>${esc(c.nom)}</td><td class="num">${eur(v.off)}</td><td class="num">${eur(n)}</td><td>${vTag(v.off > 0 ? (n - v.off) / v.off * 100 : null)}</td>
+        ${comsActifs.filter(c => !N1.com || c.id === N1.com).map(c => { const v = cov[c.id] || {}; const stC = typeof statsC === 'function' ? statsC : stats;
+          const n = sum(per.N.map(m => { try{ return stC(c.id, m).ca; }catch(e){ return 0; } })), dont = sum(per.N.map(m => { try{ return stC(c.id, m).dontAutres || 0; }catch(e){ return 0; } }));
+          return `<tr><td>${esc(c.nom)}</td><td class="num">${eur(v.off)}</td><td class="num">${eur(n)}${dont ? `<div class="hint">dont ${eur(dont)} commerciaux</div>` : ''}</td><td>${vTag(v.off > 0 ? (n - v.off) / v.off * 100 : null)}</td>
           <td>${v.hist ? '<span class="tag ok" title="Données › Historique compta">fichier global</span>' : v.taux === null ? '<span class="hint">—</span>' : v.manque ? `<span class="tag warn">manquant (${pct(v.taux)})</span>` : v.taux < 95 ? `<span class="tag info">partiel (${pct(v.taux)})</span>` : '<span class="tag ok">complet</span>'}</td></tr>`; }).join('')}
       </tbody>${totalGivedis(per)}</table></div>
       ${manque.length ? `<p class="note warn">Détail client ${per.yP} manquant pour ${manque.map(c => esc(c.nom)).join(' et ')} : leurs clients sans fiche ${per.yP} sont marqués « Pas de détail N-1 » et exclus des totaux ci-dessous. Importe le fichier compta ${per.yP} pour compléter : la section se mettra à jour seule.</p>` : ''}

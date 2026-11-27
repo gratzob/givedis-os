@@ -413,19 +413,21 @@
       .filter(x => x.ca > 0).sort((x,z) => z.ca - x.ca).slice(0,5) : [];
     let prime = null; try{ prime = calcPrime(com, mk); }catch(e){}
     let nvx = []; try{ nvx = nouveauxDuMois(com, mk); }catch(e){}
-    const synth = synthese({s, o, sPrev, sN1, cum, cum1, oa, a, vis, nvx});
+    /* comparaisons N-1 à base égale : CA comparé (commandes des autres commerciaux chez ses clients incluses) */
+    const sC = typeof statsC === 'function' ? statsC(com, mk) : s, cumC = typeof ytdC === 'function' ? ytdC(com, y, mo) : cum;
+    const synth = synthese({s, sC, o, sPrev, sN1, cum, cumC, cum1, oa, a, vis, nvx});
     const so = (typeof suiviSeul === 'function' && suiviSeul(com));
-    return {com, nom:whoName(com), mk, s, o, sPrev, sN1, cum, cum1, oa, vis, parType, parRes, Md, a, top, prime: so ? null : prime, nvx, synth, so};
+    return {com, nom:whoName(com), mk, s, sC, o, sPrev, sN1, cum, cumC, cum1, oa, vis, parType, parRes, Md, a, top, prime: so ? null : prime, nvx, synth, so};
   }
 
   function synthese(d){
     const pts = [], vig = [], prio = [];
     const att = d.o.ca ? d.s.ca / d.o.ca * 100 : null;
     if(att !== null) (att >= 100 ? pts : vig).push(`Objectif du mois ${att >= 100 ? 'atteint' : 'non atteint'} : ${pct(att)} (${eur(d.s.ca)} pour ${eur(d.o.ca)}).`);
-    const vN1 = varPct(d.s.ca, d.sN1.ca);
+    const vN1 = varPct((d.sC || d.s).ca, d.sN1.ca);
     if(vN1 !== null) (vN1 >= 0 ? pts : vig).push(`CA ${vN1 >= 0 ? 'en hausse' : 'en baisse'} de ${pct(Math.abs(vN1))} par rapport au même mois de l'an dernier.`);
-    const vC = varPct(d.cum.ca, d.cum1.ca);
-    if(vC !== null) (vC >= 0 ? pts : vig).push(`Cumul depuis janvier : ${eur(d.cum.ca)}, soit ${sgn(vC)}${pct(vC)} sur un an.`);
+    const cc = d.cumC || d.cum, vC = varPct(cc.ca, d.cum1.ca);
+    if(vC !== null) (vC >= 0 ? pts : vig).push(`Cumul depuis janvier : ${eur(cc.ca)}${cc.dontAutres ? ' (dont ' + eur(cc.dontAutres) + ' de commandes des commerciaux chez ses clients)' : ''}, soit ${sgn(vC)}${pct(vC)} sur un an.`);
     if(d.oa.ca){ const aa = d.cum.ca / d.oa.ca * 100; pts.push(`${pct(aa)} de l'objectif annuel déjà réalisé.`); }
     if(d.s.txmarge) (d.s.txmarge >= AN.seuilMarge ? pts : vig).push(`Taux de marge du mois : ${pct(d.s.txmarge)}.`);
     if(d.nvx.length) pts.push(`${d.nvx.length} nouveau${d.nvx.length>1?'x':''} client${d.nvx.length>1?'s':''} ouvert${d.nvx.length>1?'s':''}.`);
@@ -440,7 +442,7 @@
 
   function crCarte(d, editable){
     const att = d.o.ca ? d.s.ca / d.o.ca * 100 : 0;
-    const vN1 = varPct(d.s.ca, d.sN1.ca), vM1 = varPct(d.s.ca, d.sPrev.ca), vC = varPct(d.cum.ca, d.cum1.ca);
+    const vN1 = varPct((d.sC || d.s).ca, d.sN1.ca), vM1 = varPct(d.s.ca, d.sPrev.ca), vC = varPct((d.cumC || d.cum).ca, d.cum1.ca);
     const li = l => l.length ? '<ul style="margin:0;padding-left:18px;line-height:1.7">' + l.map(t => `<li>${esc(t)}</li>`).join('') + '</ul>' : '<p class="hint">—</p>';
     const C = d.a ? d.a.cats : null;
     return `<div class="card" style="margin-top:16px">
@@ -561,9 +563,9 @@
     doc.autoTable({startY:y, head:[['Indicateur','Valeur','Comparaison']], body:[
       ['CA du mois', P.eur(d.s.ca), d.so ? 'suivi sans objectif' : 'objectif ' + P.eur(d.o.ca) + ' (' + P.pct(att) + ')'],
       ['vs mois precedent', P.eur(d.sPrev.ca), P.v(varPct(d.s.ca, d.sPrev.ca))],
-      ['vs meme mois N-1', P.eur(d.sN1.ca), P.v(varPct(d.s.ca, d.sN1.ca))],
+      ['vs meme mois N-1', P.eur(d.sN1.ca), P.v(varPct((d.sC || d.s).ca, d.sN1.ca))],
       ['Marge / taux', P.eur(d.s.marge), P.pct(d.s.txmarge)],
-      ['Cumul depuis janvier', P.eur(d.cum.ca), 'N-1 : ' + P.eur(d.cum1.ca) + ' (' + P.v(varPct(d.cum.ca, d.cum1.ca)) + ')'],
+      ['Cumul depuis janvier', P.eur(d.cum.ca), 'N-1 : ' + P.eur(d.cum1.ca) + ' (' + P.v(varPct((d.cumC || d.cum).ca, d.cum1.ca)) + ')' + ((d.cumC || {}).dontAutres ? T(' - compare avec ' + P.eur(d.cumC.ca) + ' dont ' + P.eur(d.cumC.dontAutres) + ' de commandes des commerciaux chez ses clients') : '')],
       ...(d.so ? [] : [['Objectif annuel', P.eur(d.oa.ca), d.oa.ca ? P.pct(d.cum.ca/d.oa.ca*100) + ' realise' : '-']]),
       ['Visites', String(d.vis.length), T(Object.entries(d.parType).map(([k,v]) => k + ' ' + v).join(', ') || '-')],
       ['Resultats des visites', '', T(Object.entries(d.parRes).map(([k,v]) => k + ' ' + v).join(', ') || '-')],
@@ -617,18 +619,23 @@
     if(datas.length > 1){
       pdfHead(doc, 'Compte rendu mensuel equipe - ' + monthLabel(mk), 'Edite le ' + fdate(todayISO()));
       const t = {ca:sum(datas.map(d=>d.s.ca)), caO:sum(datas.filter(d=>!d.so).map(d=>d.s.ca)), cumO:sum(datas.filter(d=>!d.so).map(d=>d.cum.ca)), obj:sum(datas.map(d=>d.o.ca)), marge:sum(datas.map(d=>d.s.marge)),
-        n1:sum(datas.map(d=>d.sN1.ca)), cum:sum(datas.map(d=>d.cum.ca)), cum1:sum(datas.map(d=>d.cum1.ca)), oa:sum(datas.map(d=>d.oa.ca))};
+        n1:sum(datas.map(d=>d.sN1.ca)), cum:sum(datas.map(d=>d.cum.ca)), cum1:sum(datas.map(d=>d.cum1.ca)), oa:sum(datas.map(d=>d.oa.ca)),
+        caC:sum(datas.map(d=>(d.sC||d.s).ca)), cumC:sum(datas.map(d=>(d.cumC||d.cum).ca))};
+      /* base égale : une commande d'un commercial chez un client d'un autre de la liste est comptée deux fois dans la somme */
+      if(window.HIST && HIST.interne && typeof interneYtd === 'function'){
+        const im = HIST.interne(coms, mk).ca, iy = interneYtd(coms, mk.slice(0,4), +mk.slice(5,7)).ca;
+        t.caC -= im; t.n1 -= im; t.cumC -= iy; t.cum1 -= iy; }
       let y = pdfKpis(doc, 40, [
         t.obj ? {l:'CA equipe', v:P.eur(t.ca), s:'obj.' + (t.caO !== t.ca ? ' itin. ' : ' ') + P.eur(t.obj) + ' - ' + P.pct(t.caO/t.obj*100), c: t.caO >= t.obj ? 'ok' : 'bad'}
               : {l:'CA equipe', v:P.eur(t.ca), s:'suivi sans objectif'},
         {l:'Marge', v:P.eur(t.marge), s:'taux ' + P.pct(t.ca ? t.marge/t.ca*100 : 0)},
-        {l:'vs N-1', v:P.v(varPct(t.ca, t.n1)), s:'mois de ' + monthLabel(addM(mk,-12))},
-        {l:'Cumul', v:P.eur(t.cum), s:P.v(varPct(t.cum, t.cum1)) + ' vs N-1' + (t.oa ? ' - ' + P.pct(t.cumO/t.oa*100) + ' obj.' : '')}
+        {l:'vs N-1', v:P.v(varPct(t.caC, t.n1)), s:'mois de ' + monthLabel(addM(mk,-12))},
+        {l:'Cumul', v:P.eur(t.cum), s:P.v(varPct(t.cumC, t.cum1)) + ' vs N-1' + (t.oa ? ' - ' + P.pct(t.cumO/t.oa*100) + ' obj.' : '')}
       ]);
       y = pdfBloc(doc, y, 'Par commercial');
       doc.autoTable({startY:y, head:[['Commercial','CA mois','Objectif','Atteinte','vs N-1','Marge','Cumul','Evol. cumul','Visites','Nvx']],
-        body: datas.map(d => [T(d.nom), P.eur(d.s.ca), d.so ? '-' : P.eur(d.o.ca), d.so ? 'suivi' : P.pct(d.o.ca ? d.s.ca/d.o.ca*100 : 0), P.v(varPct(d.s.ca, d.sN1.ca)),
-          P.pct(d.s.txmarge), P.eur(d.cum.ca), P.v(varPct(d.cum.ca, d.cum1.ca)), String(d.vis.length), String(d.nvx.length)]),
+        body: datas.map(d => [T(d.nom), P.eur(d.s.ca), d.so ? '-' : P.eur(d.o.ca), d.so ? 'suivi' : P.pct(d.o.ca ? d.s.ca/d.o.ca*100 : 0), P.v(varPct((d.sC || d.s).ca, d.sN1.ca)),
+          P.pct(d.s.txmarge), P.eur(d.cum.ca), P.v(varPct((d.cumC || d.cum).ca, d.cum1.ca)), String(d.vis.length), String(d.nvx.length)]),
         ...TBL, styles:{fontSize:7.8, cellPadding:2}});
       y = doc.lastAutoTable.finalY + 8;
       y = pdfBloc(doc, y, 'Synthese equipe'); y += 3;
