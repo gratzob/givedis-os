@@ -10,13 +10,17 @@
   var sum = function(a){ return a.reduce(function(s, x){ return s + (+x || 0); }, 0); };
   var sgn = function(v){ return v >= 0 ? '+' : '−'; };
   var eurS = function(v){ return sgn(v) + eur(Math.abs(v)); };
-  var LBL = {hausse:'En hausse', baisse:'En baisse', nouveau:'Nouveau ce mois', perdu:'Sans achat ce mois', stable:'Stable'};
-  var CLS = {hausse:'ok', baisse:'bad', nouveau:'info', perdu:'bad', stable:'mute'};
+  var LBL = {hausse:'En hausse', baisse:'En baisse', nouveau:'Nouveau ce mois', perdu:'Sans achat ce mois', stable:'Stable', autre:'Client d\'un autre portefeuille'};
+  var CLS = {hausse:'ok', baisse:'bad', nouveau:'info', perdu:'bad', stable:'mute', autre:'mute'};
 
+  /* Affichage : les commandes prises par un autre commercial chez le client sont montrées dans
+     la colonne de l'année en cours (« dont … ») plutôt que retirées de l'année précédente.
+     L'écart est le même (base égale), et l'année précédente reste le vrai chiffre du client. */
   function statut(r){
-    if(!r.p) return 'nouveau';
-    if(!r.n) return 'perdu';
-    var v = (r.n - r.p) / r.p * 100;
+    if(r.proprio !== r.com) return 'autre';
+    if(!r.pA) return 'nouveau';
+    if(!r.nA) return 'perdu';
+    var v = (r.nA - r.pA) / r.pA * 100;
     return v > 5 ? 'hausse' : v < -5 ? 'baisse' : 'stable';
   }
 
@@ -43,7 +47,12 @@
       if(st.source !== 'officiel') nonDetail = true;
       (avecHist ? HIST.detailMois(com, mN) : detailSimple(com, mN)).forEach(function(r){ r.p *= f; rows.push(r); });
     });
-    rows.forEach(function(r){ r.ecart = r.n - r.p; r.var = r.p ? r.ecart / r.p * 100 : null; r.statut = statut(r); });
+    rows.forEach(function(r){
+      var a = sum(r.autres.map(function(x){ return x.ca; }));
+      if(r.proprio !== r.com){ r.pA = 0; r.nA = r.n; r.ecart = r.n - r.p; }
+      else { r.pA = r.p + a; r.nA = r.n + a; r.ecart = r.nA - r.pA; }
+      r.var = r.proprio === r.com && r.pA ? r.ecart / r.pA * 100 : null; r.statut = statut(r);
+    });
     rows.sort(function(a, b){ return Math.abs(b.ecart) - Math.abs(a.ecart); });
     var reste = (tot.n - tot.p) - sum(rows.map(function(r){ return r.ecart; }));
     return {rows: rows, tot: tot, reste: reste, nonDetail: nonDetail, frac: frac, avecHist: avecHist, mP: mP};
@@ -52,7 +61,7 @@
   function ouvrir(){
     var D = donnees(), mN = ED.m, plusieurs = ED.coms.length > 1;
     var noms = ED.coms.map(function(c){ return whoName(c); }).join(' + ');
-    var groupes = ['hausse','nouveau','baisse','perdu','stable'].map(function(s){
+    var groupes = ['hausse','nouveau','baisse','perdu','stable','autre'].map(function(s){
       var l = D.rows.filter(function(r){ return r.statut === s; });
       return {s: s, nb: l.length, ecart: sum(l.map(function(r){ return r.ecart; }))};
     });
@@ -60,12 +69,12 @@
       .filter(function(r){ return !ED.q || normKey(r.nom).indexOf(normKey(ED.q)) >= 0; });
     var ecartTot = D.tot.n - D.tot.p;
     var lignes = liste.slice(0, 400).map(function(r){
-      var note = r.autres.length ? ' <span class="tag mute" title="Commandes prises par ' + esc(r.autres.map(function(a){ return whoName(a.com) + ' (' + eur(a.ca) + ')'; }).join(', ')) +
-        ' : retirées du ' + D.mP.slice(0,4) + ' (base égale)">' + esc(r.autres.map(function(a){ return whoName(a.com); }).join(', ')) + ' : ' + eur(sum(r.autres.map(function(a){ return a.ca; }))) + '</span>' : '';
-      var chez = r.proprio !== r.com ? ' <span class="tag mute" title="Client du portefeuille ' + esc(whoName(r.proprio)) + '">chez ' + esc(whoName(r.proprio)) + '</span>' : '';
-      return '<tr><td><a href="#" onclick="clientModal(\'' + esc(r.id) + '\');return false">' + esc(r.nom) + '</a>' + chez + note + '</td>' +
+      var dont = r.autres.length ? '<div class="hint" title="Commandes prises par un autre commercial chez ce client : comptées dans son CA à lui, et ici pour comparer à base égale">dont ' +
+        esc(r.autres.map(function(a){ return whoName(a.com) + ' ' + eur(a.ca); }).join(', ')) + '</div>' : '';
+      var chez = r.proprio !== r.com ? ' <span class="tag mute" title="Client du portefeuille ' + esc(whoName(r.proprio)) + ' : la commande compte dans le CA de ' + esc(whoName(r.com)) + ' et n\'entre pas dans son écart (base égale)">client ' + esc(whoName(r.proprio)) + '</span>' : '';
+      return '<tr><td><a href="#" onclick="clientModal(\'' + esc(r.id) + '\');return false">' + esc(r.nom) + '</a>' + chez + '</td>' +
         (plusieurs ? '<td>' + esc(whoName(r.com)) + '</td>' : '') +
-        '<td class="num mono" style="color:var(--ink3)">' + eur(r.p) + '</td><td class="num mono">' + eur(r.n) + '</td>' +
+        '<td class="num mono" style="color:var(--ink3)">' + (r.proprio !== r.com ? '—' : eur(r.pA)) + '</td><td class="num mono">' + eur(r.nA) + dont + '</td>' +
         '<td class="num mono" style="color:var(--' + (r.ecart >= 0 ? 'ok' : 'bad') + ');font-weight:600">' + eurS(r.ecart) + '</td>' +
         '<td>' + (r.var === null ? '<span class="tag mute">—</span>' : evoTag(r.var)) + '</td>' +
         '<td><span class="tag ' + CLS[r.statut] + '">' + LBL[r.statut] + '</span></td></tr>';
@@ -92,7 +101,7 @@
         '<th class="num">' + D.mP.slice(0,4) + '</th><th class="num">' + mN.slice(0,4) + '</th><th class="num">Écart</th><th>Var.</th><th>Statut</th></tr></thead><tbody>' +
         (lignes || '<tr><td colspan="7" class="hint" style="text-align:center;padding:14px">Aucun client</td></tr>') + '</tbody></table></div>' +
       (liste.length > 400 ? '<p class="hint">400 premiers affichés sur ' + liste.length + '.</p>' : '') +
-      '<p class="hint" style="margin-bottom:0">Même base que le tableau : ' + (D.avecHist ? D.mP.slice(0,4) + ' à périmètre constant (clients du portefeuille ' + mN.slice(0,4) + ', toutes fiches et fichier compta global), à base égale' : 'chiffres de l\'époque, fiche par fiche') +
+      '<p class="hint" style="margin-bottom:0">« dont » : commandes prises par un autre commercial chez le client, comptées dans son CA à lui mais montrées ici pour comparer à base égale. Même base que le tableau : ' + (D.avecHist ? D.mP.slice(0,4) + ' à périmètre constant (clients du portefeuille ' + mN.slice(0,4) + ', toutes fiches et fichier compta global), à base égale' : 'chiffres de l\'époque, fiche par fiche') +
         (D.frac < 1 ? ' ; mois en cours : ' + D.mP.slice(0,4) + ' ramené au même stade' : '') + '. Clic sur un client : sa fiche.</p>'
     );
     var m = document.getElementById('modalIn'); if(m) m.classList.add('fc-wide');
