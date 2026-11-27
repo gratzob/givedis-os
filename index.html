@@ -1626,8 +1626,8 @@ function dashObjectifHtml(yN, yP){
   const pCmp = (k, i) => enCours && i === k.idx-1 ? (k.pCours || 0) : k.caP[i];
   const pSum = k => k.caP.slice(0, nbM).reduce((s,v,i)=>s+pCmp(k,i),0);
   const ecartCell = (n, p) => `<td class="num mono">${eur(n)}</td><td class="num mono" style="color:var(--${n-p>=0?'ok':'bad'})">${p || n ? eurSigne(n - p) : '—'}<div>${evoTag(evo(n, p))}</div></td>`;
-  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
-    <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
+  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr style="cursor:pointer" title="Voir les clients qui expliquent l'écart" onclick='ecartDetail(${esc(JSON.stringify(coms.map(c => c.id)))}, "${m}")'>
+    <td><strong>${monthLabel(m).split(' ')[0]}</strong> <span class="hint">🔍</span>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
     ${ks.map(k => ecartCell(k.caM[i], pCmp(k, i))).join('')}
     ${ecartCell(ke.caM[i], pCmp(ke, i))}</tr>`).join('');
   const sumTo = (a) => a.slice(0, nbM).reduce((s,v)=>s+v,0);
@@ -1749,8 +1749,8 @@ function dashSuiviHtml(yN, yP){
   const pCmp = (k, i) => enCours && i === k.idx-1 ? (k.pCours || 0) : k.caP[i];
   const pSum = k => k.caP.slice(0, nbM).reduce((s,v,i)=>s+pCmp(k,i),0);
   const ecartCell = (n, p) => `<td class="num mono">${eur(n)}</td><td class="num mono" style="color:var(--${n-p>=0?'ok':'bad'})">${p || n ? eurSigne(n - p) : '—'}<div>${evoTag(evo(n, p))}</div></td>`;
-  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
-    <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
+  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr style="cursor:pointer" title="Voir les clients qui expliquent l'écart" onclick='ecartDetail(${esc(JSON.stringify(coms.map(c => c.id)))}, "${m}")'>
+    <td><strong>${monthLabel(m).split(' ')[0]}</strong> <span class="hint">🔍</span>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
     ${ks.map(k => ecartCell(k.caM[i], pCmp(k, i))).join('')}
     ${coms.length > 1 ? ecartCell(ke.caM[i], pCmp(ke, i)) : ''}</tr>`).join('');
   const sumTo = a => a.slice(0, nbM).reduce((s,v)=>s+v,0);
@@ -5129,14 +5129,15 @@ if(fbsDisponible()){
   else renderShell();
 }
 </script>
-<script src="lecture.js?v=20261127d"></script>
-<script src="analyse.js?v=20261127d"></script>
-<script src="analyse-v2.js?v=20261127d"></script>
-<script src="comparaison-n1.js?v=20261127d"></script>
-<script src="reunion.js?v=20261127d"></script>
-<script src="portefeuilles.js?v=20261127d"></script>
-<script src="sauvegarde.js?v=20261127d"></script>
-<script src="fiche-client.js?v=20261127d"></script>
-<script src="historique.js?v=20261127d"></script>
+<script src="lecture.js?v=20261127e"></script>
+<script src="analyse.js?v=20261127e"></script>
+<script src="analyse-v2.js?v=20261127e"></script>
+<script src="comparaison-n1.js?v=20261127e"></script>
+<script src="reunion.js?v=20261127e"></script>
+<script src="portefeuilles.js?v=20261127e"></script>
+<script src="sauvegarde.js?v=20261127e"></script>
+<script src="fiche-client.js?v=20261127e"></script>
+<script src="historique.js?v=20261127e"></script>
+<script src="ecart-detail.js?v=20261127e"></script>
 </body>
 </html>

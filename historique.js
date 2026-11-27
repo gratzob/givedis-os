@@ -259,6 +259,29 @@
       var r = (perimetre(yN)[com] || {})[mP] || {ca:0, marge:0}, a = (ajustement(yN)[com] || {})[mP] || {ca:0, marge:0};
       return {ca: r.ca + a.ca, marge: r.marge + a.marge};
     },
+    /* Détail client de l'écart d'un mois (mN) pour com, sur la même base que le tableau de bord :
+       N = CA du mois des fiches de com ; N-1 = CA du même mois de l'an passé des clients de son
+       portefeuille (toutes fiches + fichier global), à base égale. Somme des N-1 = n1Com. */
+    detailMois: function(com, mN){
+      var yN = mN.slice(0,4), yP = String(+yN - 1), mP = yP + mN.slice(4), G = groupes(yN), off = {}, rows = [];
+      var estOff = function(c, m){ var k = c + '|' + m; if(!(k in off)){ try{ off[k] = stats(c, m).source === 'officiel'; }catch(e){ off[k] = false; } } return off[k]; };
+      Object.keys(G).forEach(function(k){
+        var g = G[k]; if(!g.owner) return;
+        var own = commercialDe(g.owner, yN) || g.owner.commercial, n = 0, p = 0, autres = [];
+        g.fiches.forEach(function(f){
+          var fc = commercialDe(f, yN) || f.commercial, v = +((f.caByMonth || {})[mN]) || 0;
+          if(fc === com) n += v;
+          if(fc !== own && v && estOff(fc, mN) && estOff(own, mN)){
+            if(own === com){ p -= v; autres.push({com: fc, ca: v}); }
+            if(fc === com) p += v;
+          }
+        });
+        if(own === com) toutes(g).forEach(function(f){ p += caClientMois(f, mP); });
+        if(Math.abs(n) < 0.5 && Math.abs(p) < 0.5) return;
+        rows.push({id: g.owner.id, nom: g.owner.nom, com: com, proprio: own, n: n, p: p, autres: autres});
+      });
+      return rows;
+    },
     /* Part de l'ajustement « base égale » dans le N-1 de com (mois mP). */
     ajustN1: function(com, mP, yN){ var a = (ajustement(yN)[com] || {})[mP]; return a ? {ca: a.ca, marge: a.marge} : {ca:0, marge:0}; }
   };
