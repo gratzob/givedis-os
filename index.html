@@ -1870,7 +1870,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
   <div class="card" style="background:linear-gradient(135deg,var(--panel),var(--panel2))">
     <div class="eyebrow">Exercice ${yN}${yN!==todayISO().slice(0,4)?' · consultation':''}</div>
     <h2 style="font-size:27px;margin-bottom:4px">${monthLabel(mk)}</h2>
-    <p class="hint">Chiffres consolidés à partir de la saisie hebdomadaire, des chiffres officiels et des visites importées. Les comparaisons portent sur la même période de ${yP}, de janvier à ${monthLabel(mk).split(' ')[0]}${partiel ? ' — le mois en cours étant un cumul à date, il est comparé à ' + yP + ' au même stade (jours ouvrés)' : ''}.${perimetreConstant(yP) ? ' <strong>' + yP + ' à périmètre constant</strong> : CA ' + yP + ' des clients du portefeuille ' + yN + ' de chacun, d\'après l\'historique compta.' : ''}</p>
+    <p class="hint">Chiffres consolidés à partir de la saisie hebdomadaire, des chiffres officiels et des visites importées. Les comparaisons portent sur la même période de ${yP}, de janvier à ${monthLabel(mk).split(' ')[0]}${partiel ? ' — le mois en cours étant un cumul à date, il est comparé à ' + yP + ' au même stade (jours ouvrés)' : ''}.${perimetreConstant(yP) ? ' <strong>' + yP + ' à périmètre constant</strong> : CA ' + yP + ' des clients du portefeuille ' + yN + ' de chacun, d\'après l\'historique compta. Base égale : une commande prise par un commercial chez un client d\'un autre portefeuille (ex. client du magasin) est retirée du ' + yP + ' du propriétaire et ajoutée au ' + yP + ' du commercial.' : ''}</p>
   </div>
 
   <div class="grid g4" style="margin-top:16px">
