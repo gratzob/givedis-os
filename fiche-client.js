@@ -56,7 +56,13 @@
   function estMag(com){ return equipeDe(comObj(com)) === 'magasin'; }
 
   /* Toutes les fiches du même client (même nom). */
-  function fichesDe(c){ return DB.clients.filter(function(x){ return x.nomKey === c.nomKey; }); }
+  /* + la part du fichier compta global (Données › Historique compta) qui n'est sur aucune fiche. */
+  function fichesDe(c){
+    var fs = DB.clients.filter(function(x){ return x.nomKey === c.nomKey; });
+    var v = window.HIST && HIST.virtuelle(c.nomKey);
+    return v ? fs.concat([v]) : fs;
+  }
+  function estHist(f){ return !!(f && f.__hist); }
 
   /* Dernier mois de l'exercice y à prendre en compte. */
   function limite(y){
@@ -104,7 +110,7 @@
   /* Propriétaire sur l'exercice y : le magasin s'il a une fiche dans la compta,
      sinon la fiche qui porte le plus de chiffre (y et y-1). */
   function proprio(fs, y, defaut){
-    var ens = fs.filter(enCompta);
+    var ens = fs.filter(function(f){ return !estHist(f) && enCompta(f); });
     var mag = ens.find(function(f){ return estMag(commercialDe(f, y)); });
     if(mag) return mag;
     if(ens.length <= 1) return ens[0] || defaut;
@@ -240,7 +246,7 @@
   }
   function html(D){
     var K = D.K, y = D.y, yP = D.yP;
-    var autres = D.repart.filter(function(r){ return r.com !== D.ownCom && r.n; });
+    var autres = D.repart.filter(function(r){ return r.com !== D.ownCom && r.n && !(window.HIST && r.com === HIST.COM); });
     var ownMag = estMag(D.ownCom);
     var ys = exercices().slice().sort();
 
@@ -311,7 +317,8 @@
       '<div class="tw"><table class="fc-t"><thead><tr><th>' + 'Commercial / vendeur</th><th>Rôle</th><th class="num">CA ' + y + '</th><th>Part</th><th class="num">Marge</th><th class="num">Mois avec cde</th><th class="num">CA ' + yP + '</th></tr></thead><tbody>' +
       D.repart.map(function(r){
         var part = totR ? r.n / totR * 100 : 0;
-        var role = r.com === D.ownCom ? '<span class="tag ok">Propriétaire</span>'
+        var role = window.HIST && r.com === HIST.COM ? '<span class="tag mute" title="Ventes du fichier compta global (Données › Historique compta) qui ne sont sur aucune fiche">Fichier compta global</span>'
+          : r.com === D.ownCom ? '<span class="tag ok">Propriétaire</span>'
           : ownMag ? '<span class="tag info" title="Client du magasin : CA compté pour le commercial, jamais nouveau compte">Commandes chez un client magasin</span>'
           : '<span class="tag mute">Commandes hors portefeuille</span>';
         return '<tr><td><strong>' + esc(whoName(r.com)) + '</strong>' + (estMag(r.com) ? ' <span class="tag mute">magasin</span>' : '') + '</td><td>' + role + '</td>' +
@@ -332,7 +339,8 @@
           '<td class="num mono">' + mgTxt(a.b) + '</td><td class="num mono">' + txTxt(a.b) + '</td>' +
           '<td class="hint">' + (qui.length ? qui.map(function(k){ return esc(whoName(k)) + ' ' + pct(a.ca ? a.qui[k] / a.ca * 100 : 0); }).join(' · ') : '—') + '</td></tr>';
       }).join('') + '</tbody></table></div>' +
-      '<p class="hint" style="margin-top:6px">Exercice en cours : CA jusqu\'au mois en cours, comparé à l\'année d\'avant au même stade.</p>';
+      '<p class="hint" style="margin-top:6px">Exercice en cours : CA jusqu\'au mois en cours, comparé à l\'année d\'avant au même stade.' +
+      (window.HIST && HIST.annees().length ? ' Années ' + HIST.annees().join(', ') + ' : chiffre complet du fichier compta global (Données › Historique compta) ; « Autres ventes » = la part qui n\'est sur aucune fiche.' : '') + '</p>';
 
     /* Activité terrain */
     var sD = sum(D.T.devisN.map(function(v){ return v.montantDevis; })), sC = sum(D.T.cdesN.map(function(v){ return v.montantCommande; }));
@@ -425,7 +433,7 @@
     pdfHead(doc, 'Fiche client - ' + D.own.nom, 'Exercice ' + y + ' (' + st2() + ') - edite le ' + fdate(todayISO()));
     doc.setFontSize(15); doc.setFont(undefined, 'bold'); doc.text(clean(D.own.nom), 14, 42);
     doc.setFontSize(9); doc.setFont(undefined, 'normal');
-    var autres = D.repart.filter(function(r){ return r.com !== D.ownCom && r.n; });
+    var autres = D.repart.filter(function(r){ return r.com !== D.ownCom && r.n && !(window.HIST && r.com === HIST.COM); });
     var l1 = ['Client de : ' + whoName(D.ownCom) + (estMag(D.ownCom) ? ' (magasin)' : ''), 'Statut : ' + D.statut.t + ' (' + D.statut.d + ')'];
     var l2 = [D.reseau && 'Reseau : ' + D.reseau, D.dept && 'Dept : ' + D.dept, D.ouvert && 'Ouvert le ' + fdate(D.ouvert),
       D.derCde && 'Derniere commande : ' + monthLabel(D.derCde), D.T.derniere && 'Derniere visite : ' + fdate(D.T.derniere.date)].filter(Boolean);
@@ -463,7 +471,7 @@
     doc.autoTable(Object.assign({startY: yy,
       head:[['Commercial / vendeur', 'Role', 'CA ' + y, 'Part', 'Marge', 'CA ' + yP]],
       body: D.repart.map(function(r){
-        return [clean(whoName(r.com)), r.com === D.ownCom ? 'Proprietaire' : estMag(D.ownCom) ? 'Commandes chez un client magasin' : 'Commandes hors portefeuille',
+        return [clean(whoName(r.com)), window.HIST && r.com === HIST.COM ? 'Fichier compta global' : r.com === D.ownCom ? 'Proprietaire' : estMag(D.ownCom) ? 'Commandes chez un client magasin' : 'Commandes hors portefeuille',
           e2(r.n), p2(totR ? r.n / totR * 100 : 0), mg2(r.b), e2(r.p)];
       })}, TBL, {columnStyles:{2:{halign:'right'},3:{halign:'right'},4:{halign:'right'},5:{halign:'right'}}}));
 
