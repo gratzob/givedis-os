@@ -180,6 +180,20 @@
   setInterval(verifier, 60 * 1000);
   document.addEventListener('visibilitychange', function(){ if(!document.hidden) setTimeout(verifier, 800); });
   window.addEventListener('focus', function(){ setTimeout(verifier, 800); });
+  /* Un appareil qui n'a rien à envoyer doit quand même se reconnecter pour récupérer :
+     Google n'ouvre la connexion que pendant un geste, on profite donc du premier clic / touche. */
+  var derniere = 0;
+  function reconnecter(){
+    var c = conf();
+    if(gConnecte() || !c || !c.auto || !c.fileId || !gOrigineValide()) return;
+    if(!G.pret || !G.tokenClient || Date.now() - derniere < 90 * 1000) return;
+    derniere = Date.now();
+    gConnexion(true).then(function(){ G.err = null; if(typeof gIndicateur === 'function') gIndicateur(); setTimeout(verifier, 300); })
+      .catch(function(){ if(typeof gIndicateur === 'function') gIndicateur(); });
+  }
+  document.addEventListener('pointerdown', reconnecter, true);
+  document.addEventListener('keydown', reconnecter, true);
+
   /* Première vérification dès que la connexion Google est là. */
   var essais = 0, depart = setInterval(function(){
     if(actif()){ clearInterval(depart); verifier(); }
