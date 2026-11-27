@@ -424,9 +424,13 @@
       /* N-1 sur la même base que le tableau de bord (périmètre constant) */
       const P_ = m => { try{ return typeof statsN1 === 'function' ? statsN1(id, m) : S_(id, m); }catch(e){ return S_(id, m); } };
       const den = sum(lc.map(m => P_(addM(m,-12)).ca));
-      const ratio = den > 0 ? clamp(sum(lc.map(m => S_(id, m).ca)) / den, 0.6, 1.4) : null;
+      /* base égale : ratio sur le CA comparé ; la prévision est ensuite ramenée au vrai CA en retirant
+         la moyenne récente des commandes des autres commerciaux chez ses clients */
+      const C_ = m => { try{ return typeof statsC === 'function' ? statsC(id, m) : S_(id, m); }catch(e){ return S_(id, m); } };
+      const adjMoy = mean(lc.map(m => C_(m).dontAutres || 0));
+      const ratio = den > 0 ? clamp(sum(lc.map(m => C_(m).ca)) / den, 0.6, 1.4) : null;
       const moy = mean(lc.map(m => S_(id, m).ca)), joMoy = mean(lc.map(jo));
-      const prevoir = m => { const n1 = P_(addM(m,-12)).ca; return ratio !== null && n1 > 0 ? n1 * ratio : moy * jo(m) / (joMoy || 21); };
+      const prevoir = m => { const n1 = P_(addM(m,-12)).ca; return ratio !== null && n1 > 0 ? Math.max(0, n1 * ratio - adjMoy) : moy * jo(m) / (joMoy || 21); };
       let realise = 0, projete = 0, restants = 0;
       ms.forEach(m => {
         if(m < cur){ const v = S_(id, m).ca; realise += v; projete += v; }

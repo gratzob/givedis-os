@@ -193,8 +193,11 @@
 
   /* Base égale (règle magasin) : quand un commercial prend une commande en yN chez un client
      qui appartient à quelqu'un d'autre (ex. client du magasin), ce CA compte pour lui en yN.
-     Pour comparer à base égale, le même montant est retiré du N-1 du propriétaire et ajouté
-     au N-1 du commercial, mois par mois (mois yN au chiffre officiel uniquement). */
+     Pour comparer à base égale, mois par mois (mois yN au chiffre officiel uniquement) :
+       • propriétaire : la commande est AJOUTÉE à son yN comparé (son N-1 reste le vrai chiffre
+         de ses clients) — clé « N|mois yN » ;
+       • commercial : la commande est ajoutée à son N-1 (son yN reste son vrai CA) — clé mois yP.
+     Liste des transferts dans out.__liste (pour retirer les doublons quand on additionne les deux). */
   var AJUST = {};
   function ajustement(yN){
     yN = String(yN);
@@ -211,7 +214,8 @@
           var m = yN + '-' + x, v = +((f.caByMonth || {})[m]) || 0; if(!v) return;
           if(!estOff(fc, m) || !estOff(own, m)) return;
           var t = tauxF(f, m), mg = t ? v * t.t / 100 : 0;
-          add(own, yP + '-' + x, -v, -mg); add(fc, yP + '-' + x, v, mg);
+          add(own, 'N|' + m, v, mg); add(fc, yP + '-' + x, v, mg);
+          (out.__liste || (out.__liste = [])).push({own: own, fc: fc, m: m, ca: v, marge: mg});
         });
       });
     });
@@ -259,8 +263,39 @@
       var r = (perimetre(yN)[com] || {})[mP] || {ca:0, marge:0}, a = (ajustement(yN)[com] || {})[mP] || {ca:0, marge:0};
       return {ca: r.ca + a.ca, marge: r.marge + a.marge};
     },
+    /* Détail client de l'écart d'un mois (mN) pour com, sur la même base que le tableau de bord :
+       N = CA du mois des fiches de com ; N-1 = CA du même mois de l'an passé des clients de son
+       portefeuille (toutes fiches + fichier global), à base égale. Somme des N-1 = n1Com. */
+    detailMois: function(com, mN){
+      var yN = mN.slice(0,4), yP = String(+yN - 1), mP = yP + mN.slice(4), G = groupes(yN), off = {}, rows = [];
+      var estOff = function(c, m){ var k = c + '|' + m; if(!(k in off)){ try{ off[k] = stats(c, m).source === 'officiel'; }catch(e){ off[k] = false; } } return off[k]; };
+      Object.keys(G).forEach(function(k){
+        var g = G[k]; if(!g.owner) return;
+        var own = commercialDe(g.owner, yN) || g.owner.commercial, n = 0, p = 0, autres = [];
+        g.fiches.forEach(function(f){
+          var fc = commercialDe(f, yN) || f.commercial, v = +((f.caByMonth || {})[mN]) || 0;
+          if(fc === com) n += v;
+          if(fc !== own && v && estOff(fc, mN) && estOff(own, mN)){
+            if(own === com){ n += v; autres.push({com: fc, ca: v}); }
+            if(fc === com) p += v;
+          }
+        });
+        if(own === com) toutes(g).forEach(function(f){ p += caClientMois(f, mP); });
+        if(Math.abs(n) < 0.5 && Math.abs(p) < 0.5) return;
+        rows.push({id: g.owner.id, nom: g.owner.nom, com: com, proprio: own, n: n, p: p, autres: autres});
+      });
+      return rows;
+    },
     /* Part de l'ajustement « base égale » dans le N-1 de com (mois mP). */
-    ajustN1: function(com, mP, yN){ var a = (ajustement(yN)[com] || {})[mP]; return a ? {ca: a.ca, marge: a.marge} : {ca:0, marge:0}; }
+    ajustN1: function(com, mP, yN){ var a = (ajustement(yN)[com] || {})[mP]; return a ? {ca: a.ca, marge: a.marge} : {ca:0, marge:0}; },
+    /* Commandes des autres commerciaux chez les clients de com, ajoutées à son mois mN comparé. */
+    ajustN: function(com, mN){ var a = (ajustement(mN.slice(0,4))[com] || {})['N|' + mN]; return a ? {ca: a.ca, marge: a.marge} : {ca:0, marge:0}; },
+    /* Transferts entre personnes toutes présentes dans coms (comptés deux fois dans une somme). */
+    interne: function(coms, mN){
+      var r = {ca:0, marge:0}; ((ajustement(mN.slice(0,4)).__liste) || []).forEach(function(t){
+        if(t.m === mN && coms.indexOf(t.own) >= 0 && coms.indexOf(t.fc) >= 0){ r.ca += t.ca; r.marge += t.marge; } });
+      return r;
+    }
   };
 
   /* ---------------- Lecture du fichier ---------------- */

@@ -1151,6 +1151,28 @@ function statsN1(com, mP){
   const r = HIST.n1Com(com, mP, String(+y + 1));
   return {...s, ca: r.ca, marge: r.marge, txmarge: r.ca ? r.marge / r.ca * 100 : 0, officiel: true, source: 'historique'};
 }
+/* CA « comparé » du mois : le vrai CA + les commandes prises par d'autres commerciaux chez ses
+   clients (base égale : son N-1 est le vrai chiffre de ses clients). Ne sert qu'aux comparaisons
+   avec N-1 ; objectifs, primes et CA affichés ailleurs restent sur stats(). */
+function statsC(com, mk){
+  const s = stats(com, mk);
+  if(!perimetreConstant(+mk.slice(0,4) - 1) || !HIST.ajustN) return s;
+  const a = HIST.ajustN(com, mk);
+  if(!a.ca) return s;
+  const ca = s.ca + a.ca, marge = s.marge + a.marge;
+  return {...s, ca, marge, txmarge: ca ? marge / ca * 100 : 0, dontAutres: a.ca};
+}
+function ytdC(com, y, m){
+  const r = ytd(com, y, m); let a = 0, am = 0;
+  for(let i=1;i<=m;i++){ const s = statsC(com, y + '-' + String(i).padStart(2,'0')); a += s.dontAutres || 0; am += (s.dontAutres ? s.marge - stats(com, y + '-' + String(i).padStart(2,'0')).marge : 0); }
+  return {...r, ca: r.ca + a, marge: r.marge + am, dontAutres: a};
+}
+/* Transferts entre personnes affichées ensemble (comptés deux fois dans une somme), mois 1 → m. */
+function interneYtd(ids, y, m){
+  const r = {ca:0, marge:0}; if(!window.HIST || !HIST.interne || !perimetreConstant(+y - 1)) return r;
+  for(let i=1;i<=m;i++){ const x = HIST.interne(ids, y + '-' + String(i).padStart(2,'0')); r.ca += x.ca; r.marge += x.marge; }
+  return r;
+}
 function caN1Stade(com, mkRef){ return statsN1(com, (+mkRef.slice(0,4) - 1) + mkRef.slice(4)).ca * fracStade(com, mkRef); }
 /* Cumul N-1 janvier → mois m, le dernier mois ramené au stade de mkRef. */
 function ytdStade(com, y, m, mkRef){
@@ -1486,13 +1508,14 @@ function libProj(k){
   return `${src} au ${fjCourt(k.arrete)} · ${k.faites}/${k.total} j. ouvrés`;
 }
 /* Série mensuelle d'un commercial : réel sur les mois clos, projection sur le mois en cours, rythme des 3 derniers mois ensuite. */
-function trajCom(com, y){
+function trajCom(com, y, cmp){
   const ms = monthsOfYear(y);
   const cy = curYear();
   const etat = y === cy ? 'cours' : (y < cy ? 'clos' : 'futur');
   const idx = etat === 'cours' ? +curMonth().slice(5,7) : (etat === 'clos' ? 12 : 0);
   const nbClos = etat === 'cours' ? idx - 1 : idx;
-  const caM = ms.map(m => stats(com, m).ca);
+  const caM = ms.map(m => (cmp ? statsC : stats)(com, m).ca);
+  const dontAutres = cmp ? ms.map(m => statsC(com, m).dontAutres || 0) : ms.map(() => 0);
   const obM = ms.map(m => +objMois(com, m).ca || 0);
   const caP = monthsOfYear(String(+y - 1)).map(m => statsN1(com, m).ca);
   const der3 = caM.slice(Math.max(0, nbClos - 3), nbClos);
@@ -1508,14 +1531,14 @@ function trajCom(com, y){
   /* Objectif et CA N-1 du mois en cours ramenés à la même date d'arrêté que le réalisé. */
   const objCours = etat === 'cours' ? obM[idx-1] * frac : 0;
   const pCours   = etat === 'cours' ? caP[idx-1] * frac : 0;
-  return {y, etat, idx, nbClos, caM, obM, caP, serie, proj, base, faites, total, frac, arrete, objCours, pCours, rythme, objAn: +objAn(com, y).ca || 0};
+  return {y, etat, idx, nbClos, caM, dontAutres, obM, caP, serie, proj, base, faites, total, frac, arrete, objCours, pCours, rythme, objAn: +objAn(com, y).ca || 0};
 }
 function trajFusion(list, y){
   const t0 = list[0];
   const sum = k => t0[k].map((_,i) => list.reduce((s,t)=>s+t[k][i],0));
   const bases = list.map(t => t.base);
   return {y, etat:t0.etat, idx:t0.idx, nbClos:t0.nbClos,
-    caM:sum('caM'), obM:sum('obM'), caP:sum('caP'), serie:sum('serie'),
+    caM:sum('caM'), dontAutres:sum('dontAutres'), obM:sum('obM'), caP:sum('caP'), serie:sum('serie'),
     proj: t0.etat === 'cours' ? sum('serie')[t0.idx-1] : null,
     base: bases.every(b=>b==='vide') ? 'vide' : bases.every(b=>b==='officiel') ? 'officiel' : bases.some(b=>b==='vide') ? 'mixte' : 'prorata',
     faites:0, total:0, arrete:null,
@@ -1626,8 +1649,8 @@ function dashObjectifHtml(yN, yP){
   const pCmp = (k, i) => enCours && i === k.idx-1 ? (k.pCours || 0) : k.caP[i];
   const pSum = k => k.caP.slice(0, nbM).reduce((s,v,i)=>s+pCmp(k,i),0);
   const ecartCell = (n, p) => `<td class="num mono">${eur(n)}</td><td class="num mono" style="color:var(--${n-p>=0?'ok':'bad'})">${p || n ? eurSigne(n - p) : '—'}<div>${evoTag(evo(n, p))}</div></td>`;
-  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
-    <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
+  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr style="cursor:pointer" title="Voir les clients qui expliquent l'écart" onclick='ecartDetail(${esc(JSON.stringify(coms.map(c => c.id)))}, "${m}")'>
+    <td><strong>${monthLabel(m).split(' ')[0]}</strong> <span class="hint">🔍</span>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
     ${ks.map(k => ecartCell(k.caM[i], pCmp(k, i))).join('')}
     ${ecartCell(ke.caM[i], pCmp(ke, i))}</tr>`).join('');
   const sumTo = (a) => a.slice(0, nbM).reduce((s,v)=>s+v,0);
@@ -1697,12 +1720,13 @@ function dashSuiviHtml(yN, yP){
   const coms = ACTIFS().filter(c => suiviSeul(c));
   if(!coms.length) return '';
   const nomEq = 'Magasin';
-  const ts = coms.map(c => trajCom(c.id, yN));
+  const ts = coms.map(c => trajCom(c.id, yN, true));
   const ks = ts.map(trajKpi), ke = trajKpi(trajFusion(ts, yN));
   const ms = monthsOfYear(yN);
   const enCours = ke.etat === 'cours';
   const moisCours = enCours ? monthLabel(ms[ke.idx-1]).split(' ')[0] : '';
   const fj = d => d.toLocaleDateString('fr-FR',{day:'numeric', month:'long'});
+  const dontTxt = k => { const d = (k.dontAutres || []).reduce((s,v)=>s+v,0); return d ? 'dont ' + eur(d) + ' de commandes des commerciaux chez ses clients' : ''; };
   const somme = (a, i, j) => a.slice(Math.max(0,i), Math.max(0,j)).reduce((s,v)=>s+v,0);
   const moy = (a, i, j) => { const n = Math.max(0, j - Math.max(0,i)); return n ? somme(a, i, j) / n : null; };
   const enrichir = k => {
@@ -1734,7 +1758,7 @@ function dashSuiviHtml(yN, yP){
       ${k.totalP ? `<div class="jauge" title="${pct(a)} du CA ${yP} déjà réalisé · au même stade en ${yP} : ${pct(rep)}"><i style="width:${Math.min(100,a)}%"></i><b style="left:${rep}%"></b></div>
       <div class="hint" style="margin-top:6px">${pct(a)} du CA ${yP} déjà fait · repère : ${pct(rep)} au même stade en ${yP}</div>` : `<div class="note">Aucun chiffre ${yP} pour comparer.</div>`}
       <dl class="trajl">
-        ${ligne('Réalisé à date', eur(k.realise))}
+        ${ligne('Réalisé à date', eur(k.realise), dontTxt(k))}
         ${k.totalP ? ligne('Même stade ' + yP, eur(k.pDate), `<span style="color:var(--${k.ecartDate>=0?'ok':'bad'})">${eurSigne(k.ecartDate)}</span> ${evoTag(evo(k.realise, k.pDate))}`) : ''}
         ${k.nbClos ? ligne('Mois clos', eur(k.closN), `janv. → ${monthLabel(ms[k.nbClos-1]).split(' ')[0]} · ${yP} : ${eur(k.closP)} ${evoTag(evo(k.closN, k.closP))}`) : ''}
         ${k.m3 !== null ? ligne('Moyenne 3 derniers mois', eur(k.m3), `mêmes mois ${yP} : ${k.m3P !== null ? eur(k.m3P) : '—'}${k.m3Prec !== null ? ' · 3 mois avant : ' + eur(k.m3Prec) : ''}`) : ''}
@@ -1749,8 +1773,8 @@ function dashSuiviHtml(yN, yP){
   const pCmp = (k, i) => enCours && i === k.idx-1 ? (k.pCours || 0) : k.caP[i];
   const pSum = k => k.caP.slice(0, nbM).reduce((s,v,i)=>s+pCmp(k,i),0);
   const ecartCell = (n, p) => `<td class="num mono">${eur(n)}</td><td class="num mono" style="color:var(--${n-p>=0?'ok':'bad'})">${p || n ? eurSigne(n - p) : '—'}<div>${evoTag(evo(n, p))}</div></td>`;
-  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr>
-    <td><strong>${monthLabel(m).split(' ')[0]}</strong>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
+  const ecartRows = ms.slice(0, nbM).map((m,i) => `<tr style="cursor:pointer" title="Voir les clients qui expliquent l'écart" onclick='ecartDetail(${esc(JSON.stringify(coms.map(c => c.id)))}, "${m}")'>
+    <td><strong>${monthLabel(m).split(' ')[0]}</strong> <span class="hint">🔍</span>${enCours && i === ke.idx-1 ? ' <span class="tag mute">en cours</span>' : ''}</td>
     ${ks.map(k => ecartCell(k.caM[i], pCmp(k, i))).join('')}
     ${coms.length > 1 ? ecartCell(ke.caM[i], pCmp(ke, i)) : ''}</tr>`).join('');
   const sumTo = a => a.slice(0, nbM).reduce((s,v)=>s+v,0);
@@ -1803,7 +1827,7 @@ VIEWS['pilotage:dashboard'] = () => {
   const yN = YEAR, yP = String(+YEAR - 1);
   const rows = ACTIFS().map(c => ({
     c, s: stats(c.id, mk), o: objMois(c.id, mk), p: calcPrime(c.id, mk),
-    n: ytd(c.id, yN, moisIdx), pv: ytdStade(c.id, yP, moisIdx, mk)
+    n: ytdC(c.id, yN, moisIdx), pv: ytdStade(c.id, yP, moisIdx, mk)
   }));
   const tot = rows.reduce((a,r)=>({
     ca:a.ca+r.s.ca, marge:a.marge+r.s.marge, obj:a.obj+(+r.o.ca||0),
@@ -1813,11 +1837,13 @@ VIEWS['pilotage:dashboard'] = () => {
     ca:a.ca+r.n.ca, caP:a.caP+r.pv.ca, marge:a.marge+r.n.marge, margeP:a.margeP+r.pv.marge,
     vis:a.vis+r.n.visites, visP:a.visP+r.pv.visites, nvx:a.nvx+r.n.nouveaux, nvxP:a.nvxP+r.pv.nouveaux
   }),{ca:0,caP:0,marge:0,margeP:0,vis:0,visP:0,nvx:0,nvxP:0});
+  { const it = interneYtd(ACTIFS().map(c => c.id), yN, moisIdx); cum.ca -= it.ca; cum.caP -= it.ca; cum.marge -= it.marge; cum.margeP -= it.marge; }
+  const dontCum = rows.reduce((s,r)=>s+(r.n.dontAutres||0),0) - interneYtd(ACTIFS().map(c => c.id), yN, moisIdx).ca;
   const objAnnuel = AVEC_OBJ().reduce((s,c)=>s+(+objAn(c.id, yN).ca||0),0);
   /* Atteinte calculée uniquement sur les personnes qui ont un objectif (le magasin n'en a pas). */
   const rObj = rows.filter(r => !suiviSeul(r.c));
   const avecObj = rObj.length > 0, mixte = avecObj && rObj.length < rows.length;
-  const caObj = rObj.reduce((s,r)=>s+r.s.ca,0), cumObj = rObj.reduce((s,r)=>s+r.n.ca,0);
+  const caObj = rObj.reduce((s,r)=>s+r.s.ca,0), cumObj = rObj.reduce((s,r)=>s+r.n.ca-(r.n.dontAutres||0),0);
   const atteinte = tot.obj ? caObj/tot.obj*100 : 0;
   /* Mois en cours : la couleur juge le rythme, c'est-à-dire le réalisé face à l'objectif ramené à la date du dernier chiffre. */
   const objStade = rObj.reduce((s,r)=>s+(+r.o.ca||0)*fracStade(r.c.id, mk),0);
@@ -1826,7 +1852,7 @@ VIEWS['pilotage:dashboard'] = () => {
   const clientsActifs = DB.clients.filter(cl => ACTIFS().some(c => c.id === commercialDe(cl, mk.slice(0,4))) && caClientMois(cl, mk) > 0).length;
 const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
 
-  const moisN = ACTIFS().reduce((s,c)=>s+stats(c.id, mk).ca, 0);
+  const moisN = ACTIFS().reduce((s,c)=>s+statsC(c.id, mk).ca, 0) - (window.HIST && HIST.interne && perimetreConstant(yP) ? HIST.interne(ACTIFS().map(c => c.id), mk).ca : 0);
   const moisP = ACTIFS().reduce((s,c)=>s+caN1Stade(c.id, mk), 0);
   /* Mois en cours non clos : la comparaison N-1 se fait au même stade (jours ouvrés). */
   const partiel = ACTIFS().some(c => fracStade(c.id, mk) < 1);
@@ -1836,7 +1862,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
   const partielCom = ACTIFS().some(c => fracStade(c.id, mkCom) < 1);
   const rowsCom = ACTIFS().map(c => ({
     c, s: stats(c.id, mkCom), o: objMois(c.id, mkCom), p: calcPrime(c.id, mkCom),
-    n: ytd(c.id, yN, moisIdxCom), pv: ytdStade(c.id, yP, moisIdxCom, mkCom)
+    n: ytdC(c.id, yN, moisIdxCom), pv: ytdStade(c.id, yP, moisIdxCom, mkCom)
   }));
   const totCom = rowsCom.reduce((a,r)=>({
     ca:a.ca+r.s.ca, marge:a.marge+r.s.marge, obj:a.obj+(+r.o.ca||0),
@@ -1846,6 +1872,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
     ca:a.ca+r.n.ca, caP:a.caP+r.pv.ca, marge:a.marge+r.n.marge, margeP:a.margeP+r.pv.marge,
     vis:a.vis+r.n.visites, visP:a.visP+r.pv.visites, nvx:a.nvx+r.n.nouveaux, nvxP:a.nvxP+r.pv.nouveaux
   }),{ca:0,caP:0,marge:0,margeP:0,vis:0,visP:0,nvx:0,nvxP:0});
+  { const it = interneYtd(ACTIFS().map(c => c.id), yN, moisIdxCom); cumCom.ca -= it.ca; cumCom.caP -= it.ca; cumCom.marge -= it.marge; cumCom.margeP -= it.marge; }
   const caObjCom = rowsCom.filter(r => !suiviSeul(r.c)).reduce((s,r)=>s+r.s.ca,0);
   const atteinteCom = totCom.obj ? caObjCom/totCom.obj*100 : 0;
   const moisOptions = monthsOfYear(yN).map(m => `<option value="${m}" ${m===mkCom?'selected':''}>${monthLabel(m)}</option>`).join('');
@@ -1872,7 +1899,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
   <div class="card" style="background:linear-gradient(135deg,var(--panel),var(--panel2))">
     <div class="eyebrow">Exercice ${yN}${yN!==todayISO().slice(0,4)?' · consultation':''}</div>
     <h2 style="font-size:27px;margin-bottom:4px">${monthLabel(mk)}</h2>
-    <p class="hint">Chiffres consolidés à partir de la saisie hebdomadaire, des chiffres officiels et des visites importées. Les comparaisons portent sur la même période de ${yP}, de janvier à ${monthLabel(mk).split(' ')[0]}${partiel ? ' — le mois en cours étant un cumul à date, il est comparé à ' + yP + ' au même stade (jours ouvrés)' : ''}.${perimetreConstant(yP) ? ' <strong>' + yP + ' à périmètre constant</strong> : CA ' + yP + ' des clients du portefeuille ' + yN + ' de chacun, d\'après l\'historique compta. Base égale : une commande prise par un commercial chez un client d\'un autre portefeuille (ex. client du magasin) est retirée du ' + yP + ' du propriétaire et ajoutée au ' + yP + ' du commercial.' : ''}</p>
+    <p class="hint">Chiffres consolidés à partir de la saisie hebdomadaire, des chiffres officiels et des visites importées. Les comparaisons portent sur la même période de ${yP}, de janvier à ${monthLabel(mk).split(' ')[0]}${partiel ? ' — le mois en cours étant un cumul à date, il est comparé à ' + yP + ' au même stade (jours ouvrés)' : ''}.${perimetreConstant(yP) ? ' <strong>' + yP + ' à périmètre constant</strong> : CA ' + yP + ' des clients du portefeuille ' + yN + ' de chacun, d\'après l\'historique compta. Base égale : une commande prise par un commercial chez un client d\'un autre portefeuille (ex. client du magasin) compte dans son CA ; pour comparer, elle est ajoutée au ' + yN + ' du propriétaire du client (mention « dont ») et au ' + yP + ' du commercial.' : ''}</p>
   </div>
 
   <div class="grid g4" style="margin-top:16px">
@@ -1902,7 +1929,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
     </div>
     <div class="grid g4">
       <div class="kpi ${(evo(cum.ca,cum.caP)||0)>=0?'ok':'bad'}">
-        <div class="lab">CA cumulé</div><div class="val">${eur(cum.ca)}</div>
+        <div class="lab">CA cumulé</div><div class="val">${eur(cum.ca)}</div>${dontCum >= 1 ? `<div class="sub" title="Commandes prises par les commerciaux chez les clients du magasin : comptées dans leur CA, et ici pour comparer à ${yP} à base égale">dont ${eur(dontCum)} de commandes des commerciaux chez ses clients</div>` : ''}
         <div class="sub">${yP}${partiel ? ' au même stade' : ''} : ${eur(cum.caP)}</div>
         <div class="sub" style="margin-top:6px">${evoTag(evo(cum.ca, cum.caP))}</div>
       </div>
@@ -1936,16 +1963,16 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
         <th class="num">Nvx clients</th>${avecObj?'<th class="num">Prime</th>':''}<th>Source</th></tr></thead>
       <tbody>${rowsCom.map(r=>{
         const a = r.o.ca ? r.s.ca/r.o.ca*100 : 0;
-        const ss = suiviSeul(r.c), caMP = caN1Stade(r.c.id, mkCom);
+        const ss = suiviSeul(r.c), caMP = caN1Stade(r.c.id, mkCom), caMC = statsC(r.c.id, mkCom).ca;
         return `<tr>
           <td><strong>${esc(r.c.nom)}</strong>${ss && mixte ? ' <span class="tag mute">magasin</span>' : ''}</td>
           <td class="num mono">${eur(r.s.ca)}</td>
-          ${!avecObj ? `<td class="num mono" style="color:var(--ink3)">${eur(caMP)}</td><td>${evoTag(evo(r.s.ca, caMP))}</td>`
+          ${!avecObj ? `<td class="num mono" style="color:var(--ink3)">${eur(caMP)}</td><td>${evoTag(evo(caMC, caMP))}</td>`
           : ss ? `<td class="num mono" style="color:var(--ink3)">—</td><td><span class="tag mute">suivi seul</span></td>`
           : `<td class="num mono" style="color:var(--ink3)">${eur(r.o.ca)}</td>
           <td style="min-width:120px"><span class="tag ${a>=100?'ok':a>=80?'warn':'bad'}">${pct(a)}</span>
             <div class="bar"><i class="${a>=100?'ok':a<80?'bad':''}" style="width:${Math.min(100,a)}%"></i></div></td>`}
-          <td class="num mono">${eur(r.n.ca)}</td>
+          <td class="num mono">${eur(r.n.ca)}${r.n.dontAutres ? `<div class="hint">dont ${eur(r.n.dontAutres)} commerciaux</div>` : ''}</td>
           <td class="num mono" style="color:var(--ink3)">${eur(r.pv.ca)}</td>
           <td>${evoTag(evo(r.n.ca, r.pv.ca))}</td>
           <td class="num mono">${r.n.nouveaux}</td>
@@ -2031,7 +2058,7 @@ dashObjectifChart();
   if(c1) CHARTS.d1 = new Chart(c1, {
     type:'bar',
     data:{ labels: ms.map(m=>monthLabel(m).split(' ')[0]), datasets:[
-      ...ACTIFS().map((c,i)=>({label:c.nom+' '+yN, data:ms.map(m=>stats(c.id,m).ca), backgroundColor:PALETTE[i%6], borderRadius:4, stack:'n'})),
+      ...ACTIFS().map((c,i)=>({label:c.nom+' '+yN, data:ms.map(m=>statsC(c.id,m).ca), backgroundColor:PALETTE[i%6], borderRadius:4, stack:'n'})),
       {label:'Total '+yP+(perimetreConstant(yP)?' (périmètre '+yN+')':''), type:'line', data:monthsOfYear(yP).map(m=>ACTIFS().reduce((s,c)=>s+statsN1(c.id,m).ca,0)),
        borderColor:'#6b7c95', borderDash:[6,4], pointRadius:2, tension:.3}
     ]},
@@ -2258,7 +2285,7 @@ VIEWS['pilotage:graphiques'] = () => `
 AFTER['pilotage:graphiques'] = () => {
   const y = YEAR, ms = monthsOfYear(y);
   let cum = 0, cumObj = 0;
-  const serieCum = ms.map(m => { cum += ACTIFS().reduce((s,c)=>s+stats(c.id,m).ca,0); return cum; });
+  const serieCum = ms.map(m => { cum += ACTIFS().reduce((s,c)=>s+statsC(c.id,m).ca,0) - (window.HIST && HIST.interne && perimetreConstant(+m.slice(0,4)-1) ? HIST.interne(ACTIFS().map(c => c.id), m).ca : 0); return cum; });
   const serieObj = ms.map(m => { cumObj += ACTIFS().reduce((s,c)=>s+(+objMois(c.id,m).ca||0),0); return cumObj; });
   let cumP = 0;
   const yP = String(+y - 1);
@@ -3809,7 +3836,7 @@ function pdfEvolutionCommerciaux(){
     let totN = 0, totP = 0;
     const body = noms.map((nom, i) => {
       const mm = String(i+1).padStart(2,'0');
-      const caN = stats(c.id, yN+'-'+mm).ca;
+      const caN = statsC(c.id, yN+'-'+mm).ca;
       const caP = statsN1(c.id, yP+'-'+mm).ca;
       totN += caN; totP += caP;
       const evoPct = caP ? (caN-caP)/caP*100 : null;
@@ -5129,14 +5156,15 @@ if(fbsDisponible()){
   else renderShell();
 }
 </script>
-<script src="lecture.js?v=20261127d"></script>
-<script src="analyse.js?v=20261127d"></script>
-<script src="analyse-v2.js?v=20261127d"></script>
-<script src="comparaison-n1.js?v=20261127d"></script>
-<script src="reunion.js?v=20261127d"></script>
-<script src="portefeuilles.js?v=20261127d"></script>
-<script src="sauvegarde.js?v=20261127d"></script>
-<script src="fiche-client.js?v=20261127d"></script>
-<script src="historique.js?v=20261127d"></script>
+<script src="lecture.js?v=20261127f"></script>
+<script src="analyse.js?v=20261127f"></script>
+<script src="analyse-v2.js?v=20261127f"></script>
+<script src="comparaison-n1.js?v=20261127f"></script>
+<script src="reunion.js?v=20261127f"></script>
+<script src="portefeuilles.js?v=20261127f"></script>
+<script src="sauvegarde.js?v=20261127f"></script>
+<script src="fiche-client.js?v=20261127f"></script>
+<script src="historique.js?v=20261127f"></script>
+<script src="ecart-detail.js?v=20261127f"></script>
 </body>
 </html>
