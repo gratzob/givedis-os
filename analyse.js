@@ -398,8 +398,11 @@
     const s = stats(com, mk);
     const o = objMois(com, mk) || {ca:0, marge:0};
     const sPrev = stats(com, addM(mk,-1));
-    const sN1 = stats(com, addM(mk,-12));
-    const cum = ytd(com, y, mo), cum1 = ytd(com, String(+y-1), mo);
+    /* N-1 sur la même base que le tableau de bord (périmètre constant, au même stade) */
+    const n1f = typeof statsN1 === 'function' ? statsN1 : stats;
+    const sN1b = n1f(com, addM(mk,-12)); let fs = 1; try{ fs = fracStade(com, mk); }catch(e){}
+    const sN1 = {...sN1b, ca: sN1b.ca * fs, marge: sN1b.marge * fs};
+    const cum = ytd(com, y, mo), cum1 = typeof ytdStade === 'function' ? ytdStade(com, String(+y-1), mo, mk) : ytd(com, String(+y-1), mo);
     const oa = objAn(com, y) || {ca:0};
     const vis = DB.visites.filter(v => v.commercial === com && monthKey(v.date) === mk);
     const parType = {}, parRes = {};

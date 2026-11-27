@@ -191,8 +191,35 @@
     return (PERIM[yN] = out);
   }
 
+  /* Base égale (règle magasin) : quand un commercial prend une commande en yN chez un client
+     qui appartient à quelqu'un d'autre (ex. client du magasin), ce CA compte pour lui en yN.
+     Pour comparer à base égale, le même montant est retiré du N-1 du propriétaire et ajouté
+     au N-1 du commercial, mois par mois (mois yN au chiffre officiel uniquement). */
+  var AJUST = {};
+  function ajustement(yN){
+    yN = String(yN);
+    if(AJUST[yN]) return AJUST[yN];
+    var yP = String(+yN - 1), out = {}, G = groupes(yN), off = {};
+    var estOff = function(com, m){ var k = com + '|' + m; if(!(k in off)){ try{ off[k] = stats(com, m).source === 'officiel'; }catch(e){ off[k] = false; } } return off[k]; };
+    var add = function(com, m, ca, mg){ var o = out[com] || (out[com] = {}); var r = o[m] || (o[m] = {ca:0, marge:0}); r.ca += ca; r.marge += mg; };
+    Object.keys(G).forEach(function(k){
+      var g = G[k]; if(!g.owner || g.fiches.length < 2) return;
+      var own = commercialDe(g.owner, yN) || g.owner.commercial;
+      g.fiches.forEach(function(f){
+        var fc = commercialDe(f, yN) || f.commercial; if(!fc || fc === own) return;
+        MM.forEach(function(x){
+          var m = yN + '-' + x, v = +((f.caByMonth || {})[m]) || 0; if(!v) return;
+          if(!estOff(fc, m) || !estOff(own, m)) return;
+          var t = tauxF(f, m), mg = t ? v * t.t / 100 : 0;
+          add(own, yP + '-' + x, -v, -mg); add(fc, yP + '-' + x, v, mg);
+        });
+      });
+    });
+    return (AJUST[yN] = out);
+  }
+
   var renderOrig2 = window.render;
-  window.render = function(){ GRP = {}; PERIM = {}; return renderOrig2.apply(this, arguments); };
+  window.render = function(){ GRP = {}; PERIM = {}; AJUST = {}; return renderOrig2.apply(this, arguments); };
 
   window.HIST = {
     COM: HIST_COM,
@@ -202,7 +229,7 @@
     actif: function(){ return annees().length > 0; },
     virtuelles: function(){ return cache().liste; },
     virtuelle: function(k){ return cache().idx[k] || null; },
-    vider: function(){ CACHE = null; GRP = {}; PERIM = {}; },
+    vider: function(){ CACHE = null; GRP = {}; PERIM = {}; AJUST = {}; },
     /* Fiche qui porte le client sur l'exercice y (les autres fiches du même nom y sont additionnées). */
     proprio: function(c, y){ return groupeDe(c, y).owner; },
     estProprio: function(c, y){ return groupeDe(c, y).owner === c; },
@@ -228,7 +255,12 @@
       return ca ? {t: mg / ca * 100, repli: false} : null;
     },
     /* {ca, marge} N-1 (mois mP) des clients que com a en portefeuille sur yN. */
-    n1Com: function(com, mP, yN){ var r = (perimetre(yN)[com] || {})[mP]; return r ? {ca: r.ca, marge: r.marge} : {ca: 0, marge: 0}; }
+    n1Com: function(com, mP, yN){
+      var r = (perimetre(yN)[com] || {})[mP] || {ca:0, marge:0}, a = (ajustement(yN)[com] || {})[mP] || {ca:0, marge:0};
+      return {ca: r.ca + a.ca, marge: r.marge + a.marge};
+    },
+    /* Part de l'ajustement « base égale » dans le N-1 de com (mois mP). */
+    ajustN1: function(com, mP, yN){ var a = (ajustement(yN)[com] || {})[mP]; return a ? {ca: a.ca, marge: a.marge} : {ca:0, marge:0}; }
   };
 
   /* ---------------- Lecture du fichier ---------------- */
