@@ -127,14 +127,108 @@
     window.whoName = function(id){ return id === HIST_COM ? 'Autres ventes (compta globale)' : whoOrig.apply(this, arguments); };
   }
 
+  /* ---------------- Clients regroupés (même nom) ----------------
+     Un client GIVEDIS = toutes ses fiches (magasin, itinérants) + la part du
+     fichier global. Sur un exercice y, le client appartient à :
+       1. le magasin, s'il a une fiche magasin avec du chiffre sur y (règle magasin) ;
+       2. sinon la fiche qui fait le plus de chiffre sur y ;
+       3. sinon la fiche la plus récemment active.
+     Utilisé seulement quand un historique est importé. */
+  var GRP = {};
+  function caAn(f, y){ return somme(MM.map(function(x){ return caClientMois(f, y + '-' + x); })); }
+  function dernierMois(f){
+    var d = ''; Object.keys(f.caByMonth || {}).forEach(function(m){ if(+f.caByMonth[m] > 0 && m > d) d = m; }); return d;
+  }
+  function estMagF(f, y){ return typeof equipeDe === 'function' && equipeDe(comObj(commercialDe(f, y))) === 'magasin'; }
+  function groupes(y){
+    y = String(y);
+    if(GRP[y]) return GRP[y];
+    var parNom = {};
+    DB.clients.forEach(function(c){ (parNom[c.nomKey] = parNom[c.nomKey] || {fiches:[], virt:null}).fiches.push(c); });
+    cache().liste.forEach(function(v){ (parNom[v.nomKey] = parNom[v.nomKey] || {fiches:[], virt:null}).virt = v; });
+    Object.keys(parNom).forEach(function(k){
+      var g = parNom[k], fs = g.fiches;
+      if(!fs.length){ g.owner = null; return; }
+      if(fs.length === 1){ g.owner = fs[0]; return; }
+      var n = fs.map(function(f){ return {f: f, ca: caAn(f, y), mag: estMagF(f, y), der: dernierMois(f)}; });
+      var mag = n.filter(function(x){ return x.mag && x.ca > 0; });
+      var act = n.filter(function(x){ return x.ca > 0; });
+      var pick = (mag.length ? mag : act.length ? act : n).slice().sort(function(a, b){
+        return (b.ca - a.ca) || (b.der > a.der ? 1 : b.der < a.der ? -1 : 0); })[0];
+      g.owner = pick.f;
+    });
+    return (GRP[y] = parNom);
+  }
+  function groupeDe(c, y){ return groupes(y)[c.nomKey] || {fiches:[c], virt:null, owner:c}; }
+  function toutes(g){ return g.virt ? g.fiches.concat([g.virt]) : g.fiches; }
+  function tauxF(f, m){
+    var t = (f.margeByMonth || {})[m];
+    if(t != null && t !== '') return {t: +t, repli: false};
+    if(f.margeDefaut != null && f.margeDefaut !== '') return {t: +f.margeDefaut, repli: false};
+    if(f.__hist) return null;
+    try{ var y = m.slice(0, 4); return {t: +tauxClient(f, m, commercialDe(f, y), y) || 0, repli: true}; }catch(e){ return null; }
+  }
+
+  /* Périmètre constant : CA N-1 des clients du portefeuille de l'exercice yN. */
+  var PERIM = {};
+  function perimetre(yN){
+    yN = String(yN);
+    if(PERIM[yN]) return PERIM[yN];
+    var yP = String(+yN - 1), out = {}, G = groupes(yN);
+    Object.keys(G).forEach(function(k){
+      var g = G[k]; if(!g.owner) return;
+      var com = commercialDe(g.owner, yN) || g.owner.commercial;
+      var o = out[com] || (out[com] = {});
+      toutes(g).forEach(function(f){
+        MM.forEach(function(x){
+          var m = yP + '-' + x, ca = caClientMois(f, m); if(!ca) return;
+          var r = o[m] || (o[m] = {ca:0, marge:0});
+          var t = tauxF(f, m);
+          r.ca += ca; r.marge += t ? ca * t.t / 100 : 0;
+        });
+      });
+    });
+    return (PERIM[yN] = out);
+  }
+
+  var renderOrig2 = window.render;
+  window.render = function(){ GRP = {}; PERIM = {}; return renderOrig2.apply(this, arguments); };
+
   window.HIST = {
     COM: HIST_COM,
     annees: annees,
     annee: annee,
     a: function(y){ return !!annee(y); },
+    actif: function(){ return annees().length > 0; },
     virtuelles: function(){ return cache().liste; },
     virtuelle: function(k){ return cache().idx[k] || null; },
-    vider: function(){ CACHE = null; }
+    vider: function(){ CACHE = null; GRP = {}; PERIM = {}; },
+    /* Fiche qui porte le client sur l'exercice y (les autres fiches du même nom y sont additionnées). */
+    proprio: function(c, y){ return groupeDe(c, y).owner; },
+    estProprio: function(c, y){ return groupeDe(c, y).owner === c; },
+    fichesGroupe: function(c, y){ return groupeDe(c, y).fiches; },
+    /* CA du client entier sur un mois, porté par sa fiche propriétaire (0 pour les autres fiches). */
+    caGroupe: function(c, m, y){
+      var g = groupeDe(c, y); if(g.owner !== c) return 0;
+      return somme(toutes(g).map(function(f){ return caClientMois(f, m); }));
+    },
+    caGroupeAn: function(c, y, yRef){
+      var g = groupeDe(c, yRef || y);
+      return somme(toutes(g).map(function(f){ return caAn(f, y); }));
+    },
+    moisGroupe: function(c, y){
+      var g = groupeDe(c, y), s = {};
+      toutes(g).forEach(function(f){ Object.keys(f.caByMonth || {}).forEach(function(m){ s[m] = (s[m] || 0) + (+f.caByMonth[m] || 0); }); });
+      return s;
+    },
+    /* Taux de marge du client entier sur un mois : moyenne pondérée des taux connus ; null si tous sont des taux de repli. */
+    tauxGroupe: function(c, m, y){
+      var g = groupeDe(c, y), ca = 0, mg = 0;
+      toutes(g).forEach(function(f){ var v = caClientMois(f, m); if(!v) return; var t = tauxF(f, m); if(t && !t.repli){ ca += v; mg += v * t.t / 100; } });
+      return ca ? {t: mg / ca * 100, repli: false} : null;
+    },
+    /* {ca, marge} N-1 (mois mP) des clients que com a en portefeuille sur yN. */
+    n1Com: function(com, mP, yN){ var r = (perimetre(yN)[com] || {})[mP]; return r ? {ca: r.ca, marge: r.marge} : {ca: 0, marge: 0}; }
   };
 
   /* ---------------- Lecture du fichier ---------------- */

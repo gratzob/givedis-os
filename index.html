@@ -1138,12 +1138,27 @@ function fracStade(com, mk){
   return st.frac;
 }
 /* CA (et marge) N-1 du même mois, ramené au stade du mois mkRef. */
-function caN1Stade(com, mkRef){ return stats(com, (+mkRef.slice(0,4) - 1) + mkRef.slice(4)).ca * fracStade(com, mkRef); }
+/* Chiffres N-1 d'un commercial pour le mois mP.
+   Si l'historique compta de l'année est importé (Données › Historique compta) : à périmètre
+   constant, c'est-à-dire le CA de cette année-là des clients qu'il a en portefeuille l'année
+   suivante. Sinon : ses chiffres de l'époque. Visites et nouveaux clients restent ceux de l'époque. */
+function perimetreConstant(y){ return !!(window.HIST && HIST.a(String(y))); }
+function statsN1(com, mP){
+  const s = stats(com, mP), y = mP.slice(0,4);
+  if(!perimetreConstant(y)) return s;
+  const r = HIST.n1Com(com, mP, String(+y + 1));
+  return {...s, ca: r.ca, marge: r.marge, txmarge: r.ca ? r.marge / r.ca * 100 : 0, officiel: true, source: 'historique'};
+}
+function caN1Stade(com, mkRef){ return statsN1(com, (+mkRef.slice(0,4) - 1) + mkRef.slice(4)).ca * fracStade(com, mkRef); }
 /* Cumul N-1 janvier → mois m, le dernier mois ramené au stade de mkRef. */
 function ytdStade(com, y, m, mkRef){
-  const r = ytd(com, y, m);
+  const r = {ca:0, marge:0, visites:0, nouveaux:0, commandes:0};
+  for(let i=1;i<=m;i++){
+    const s = statsN1(com, y + '-' + String(i).padStart(2,'0'));
+    r.ca+=s.ca; r.marge+=s.marge; r.visites+=s.visites; r.nouveaux+=s.nouveaux; r.commandes+=s.commandes;
+  }
   const f = fracStade(com, mkRef);
-  if(f < 1){ const last = stats(com, y + '-' + String(m).padStart(2,'0')); r.ca -= last.ca * (1 - f); r.marge -= last.marge * (1 - f); }
+  if(f < 1){ const last = statsN1(com, y + '-' + String(m).padStart(2,'0')); r.ca -= last.ca * (1 - f); r.marge -= last.marge * (1 - f); }
   return r;
 }
 function evo(a, b){ return (b && b !== 0) ? (a-b)/b*100 : null; }
@@ -1477,7 +1492,7 @@ function trajCom(com, y){
   const nbClos = etat === 'cours' ? idx - 1 : idx;
   const caM = ms.map(m => stats(com, m).ca);
   const obM = ms.map(m => +objMois(com, m).ca || 0);
-  const caP = monthsOfYear(String(+y - 1)).map(m => stats(com, m).ca);
+  const caP = monthsOfYear(String(+y - 1)).map(m => statsN1(com, m).ca);
   const der3 = caM.slice(Math.max(0, nbClos - 3), nbClos);
   const rythme = der3.length ? der3.reduce((s,v)=>s+v,0) / der3.length : 0;
   let proj = null, base = null, faites = 0, total = 0, frac = 0, arrete = null;
@@ -1855,7 +1870,7 @@ const trajHtml = dashObjectifHtml(yN, yP) + dashSuiviHtml(yN, yP);
   <div class="card" style="background:linear-gradient(135deg,var(--panel),var(--panel2))">
     <div class="eyebrow">Exercice ${yN}${yN!==todayISO().slice(0,4)?' · consultation':''}</div>
     <h2 style="font-size:27px;margin-bottom:4px">${monthLabel(mk)}</h2>
-    <p class="hint">Chiffres consolidés à partir de la saisie hebdomadaire, des chiffres officiels et des visites importées. Les comparaisons portent sur la même période de ${yP}, de janvier à ${monthLabel(mk).split(' ')[0]}${partiel ? ' — le mois en cours étant un cumul à date, il est comparé à ' + yP + ' au même stade (jours ouvrés)' : ''}.</p>
+    <p class="hint">Chiffres consolidés à partir de la saisie hebdomadaire, des chiffres officiels et des visites importées. Les comparaisons portent sur la même période de ${yP}, de janvier à ${monthLabel(mk).split(' ')[0]}${partiel ? ' — le mois en cours étant un cumul à date, il est comparé à ' + yP + ' au même stade (jours ouvrés)' : ''}.${perimetreConstant(yP) ? ' <strong>' + yP + ' à périmètre constant</strong> : CA ' + yP + ' des clients du portefeuille ' + yN + ' de chacun, d\'après l\'historique compta.' : ''}</p>
   </div>
 
   <div class="grid g4" style="margin-top:16px">
@@ -2015,7 +2030,7 @@ dashObjectifChart();
     type:'bar',
     data:{ labels: ms.map(m=>monthLabel(m).split(' ')[0]), datasets:[
       ...ACTIFS().map((c,i)=>({label:c.nom+' '+yN, data:ms.map(m=>stats(c.id,m).ca), backgroundColor:PALETTE[i%6], borderRadius:4, stack:'n'})),
-      {label:'Total '+yP, type:'line', data:monthsOfYear(yP).map(m=>ACTIFS().reduce((s,c)=>s+stats(c.id,m).ca,0)),
+      {label:'Total '+yP+(perimetreConstant(yP)?' (périmètre '+yN+')':''), type:'line', data:monthsOfYear(yP).map(m=>ACTIFS().reduce((s,c)=>s+statsN1(c.id,m).ca,0)),
        borderColor:'#6b7c95', borderDash:[6,4], pointRadius:2, tension:.3}
     ]},
     options:{...CHART_BASE, scales:{...CHART_BASE.scales, x:{...CHART_BASE.scales.x, stacked:true}, y:{...CHART_BASE.scales.y, stacked:true}}}
@@ -2038,11 +2053,26 @@ let VUE_CLIENTS = 'liste';      /* liste | mensuel */
 let MESURE_CLIENTS = 'ca';      /* ca | marge */
 VIEWS['pilotage:clients'] = () => {
   const reseaux = [...new Set(DB.clients.map(c=>c.reseau).filter(Boolean))].sort();
+  const GRP = window.HIST && HIST.actif() && HIST.a(String(+YEAR-1)) ? {
+    lim: YEAR === curYear() ? (()=>{ const d = new Date(); d.setDate(0); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); })() : YEAR + '-12'
+  } : null;
+  const yPc = String(+YEAR-1);
   let list = DB.clients.map(c=>{
     const lv = lastVisitOf(c.id);
     const d = lv ? daysSince(lv.date) : null;
-    const caY = Object.entries(c.caByMonth||{}).filter(([k])=>k.startsWith(YEAR)).reduce((s,[,v])=>s+v,0);
-    return {c, lv, d, caY};
+    let caY = Object.entries(c.caByMonth||{}).filter(([k])=>k.startsWith(YEAR)).reduce((s,[,v])=>s+v,0);
+    /* Historique compta importé : le client entier (toutes ses fiches + fichier global) sur la fiche qui le porte. */
+    let g = null;
+    if(GRP){
+      const own = HIST.estProprio(c, YEAR);
+      if(own){
+        const ms = monthsOfYear(YEAR).filter(m => m <= GRP.lim);
+        const n = ms.reduce((s,m)=>s+HIST.caGroupe(c, m, YEAR),0), p = ms.reduce((s,m)=>s+HIST.caGroupe(c, (+YEAR-1)+m.slice(4), YEAR),0);
+        caY = monthsOfYear(YEAR).reduce((s,m)=>s+HIST.caGroupe(c, m, YEAR),0);
+        g = {own, caP: HIST.caGroupeAn(c, String(+YEAR-1), YEAR), n, p};
+      } else g = {own, proprio: HIST.proprio(c, YEAR)};
+    }
+    return {c, lv, d, caY, g};
   });
   if(FILTRE.q){ const q = normKey(FILTRE.q); list = list.filter(x=>x.c.nomKey.includes(q)); }
   if(FILTRE.com) list = list.filter(x=>x.c.commercial===FILTRE.com);
@@ -2084,13 +2114,14 @@ VIEWS['pilotage:clients'] = () => {
     ${!list.length
       ? emptyState('◇','Aucun client ne correspond aux filtres.',`<button class="btn ghost" onclick="FILTRE={q:'',com:'',reseau:'',etat:''};render()">Réinitialiser les filtres</button>`)
       : VUE_CLIENTS === 'mensuel' ? tableauMensuel(list) : `<div class="tw"><table>
-      <thead><tr><th>Client</th><th>Commercial</th><th>Réseau</th><th>Dept</th><th class="num">CA ${YEAR}</th><th>Dernière visite</th><th></th></tr></thead>
-      <tbody>${list.slice(0,400).map(({c,lv,d,caY})=>`<tr>
+      <thead><tr><th>Client</th><th>Commercial</th><th>Réseau</th><th>Dept</th><th class="num">CA ${YEAR}</th>${GRP ? `<th class="num">CA ${yPc}</th><th title="janv. → ${monthLabel(GRP.lim).split(' ')[0]} ${YEAR} comparé aux mêmes mois ${yPc}">Évol. à date</th>` : ''}<th>Dernière visite</th><th></th></tr></thead>
+      <tbody>${list.slice(0,400).map(({c,lv,d,caY,g})=>`<tr>
         <td><strong>${esc(c.nom)}</strong>${estProspect(c)?' <span class="tag warn" title="Absent du fichier compta : compté en prospection">prospect</span>':''}${clientDuMagasin(c, YEAR)?' <span class="tag info" title="Client du magasin : commandes prises par le commercial, comptées en CA uniquement">client magasin</span>':''}</td>
         <td>${esc(whoName(c.commercial))}</td>
         <td>${esc(c.reseau||'—')}</td>
         <td class="mono">${esc(c.dept||'—')}</td>
         <td class="num mono">${caY?eur(caY):'—'}</td>
+        ${GRP ? (g && g.own ? `<td class="num mono">${g.caP?eur(g.caP):'—'}</td><td>${g.p||g.n?evoTag(evo(g.n,g.p)):'<span class="tag mute">—</span>'}</td>` : `<td colspan="2" class="hint" title="Le chiffre de ce client est additionné sur la fiche qui le porte">compté chez ${esc(whoName(g && g.proprio ? (commercialDe(g.proprio, YEAR) || g.proprio.commercial) : ''))}</td>`) : ''}
         <td class="mono">${lv?fdate(lv.date):'jamais'} <span class="tag ${d===null||d>60?'bad':d>30?'warn':'ok'}">${d===null?'—':d+' j'}</span></td>
         <td><button class="btn ghost sm" onclick="clientModal('${c.id}')">Fiche</button></td></tr>`).join('')}</tbody></table></div>
       ${list.length>400?`<p class="hint" style="margin-top:10px">400 premiers résultats affichés sur ${list.length}.</p>`:''}`}
@@ -2229,7 +2260,7 @@ AFTER['pilotage:graphiques'] = () => {
   const serieObj = ms.map(m => { cumObj += ACTIFS().reduce((s,c)=>s+(+objMois(c.id,m).ca||0),0); return cumObj; });
   let cumP = 0;
   const yP = String(+y - 1);
-  const seriePrec = monthsOfYear(yP).map(m => { cumP += ACTIFS().reduce((s,c)=>s+stats(c.id,m).ca,0); return cumP; });
+  const seriePrec = monthsOfYear(yP).map(m => { cumP += ACTIFS().reduce((s,c)=>s+statsN1(c.id,m).ca,0); return cumP; });
   const g1 = document.getElementById('chG1');
   if(g1) CHARTS.g1 = new Chart(g1,{type:'line',data:{labels:ms.map(m=>monthLabel(m).split(' ')[0]),datasets:[
     {label:'CA cumulé '+y,data:serieCum,borderColor:'#1f5a96',backgroundColor:'rgba(31,90,150,.12)',fill:true,tension:.3},
@@ -3777,7 +3808,7 @@ function pdfEvolutionCommerciaux(){
     const body = noms.map((nom, i) => {
       const mm = String(i+1).padStart(2,'0');
       const caN = stats(c.id, yN+'-'+mm).ca;
-      const caP = stats(c.id, yP+'-'+mm).ca;
+      const caP = statsN1(c.id, yP+'-'+mm).ca;
       totN += caN; totP += caP;
       const evoPct = caP ? (caN-caP)/caP*100 : null;
       return [nom, Math.round(caN)+' EUR', Math.round(caP)+' EUR',
