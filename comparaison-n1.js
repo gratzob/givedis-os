@@ -46,7 +46,9 @@
   function couverture(P, yP){
     const out = {}, hist = histA(yP);
     DB.commerciaux.forEach(co => {
-      const off = sum(P.map(m => { try{ return stats(co.id, m).ca; }catch(e){ return 0; } }));
+      /* même base que le tableau de bord : à périmètre constant si l'historique compta est importé */
+      const st = typeof statsN1 === 'function' ? statsN1 : stats;
+      const off = sum(P.map(m => { try{ return st(co.id, m).ca; }catch(e){ return 0; } }));
       const det = sum(DB.clients.filter(c => commercialDe(c, yP) === co.id).map(c => sum(P.map(m => caClientMois(c, m)))));
       out[co.id] = {off, det, taux: off > 0 ? det / off * 100 : null, manque: !hist && off > 0 && det < 0.5 * off, hist};
     });
@@ -152,7 +154,7 @@
           <button class="btn sm" onclick="n1Export()">⬇ Excel</button>
         </div></div>
 
-      <div class="tw" style="margin-bottom:12px"><table><thead><tr><th>Commercial</th><th class="num">${per.yP} (chiffres du mois)</th><th class="num">${per.yN}</th><th>Évolution</th><th>Détail client ${per.yP}</th></tr></thead><tbody>
+      <div class="tw" style="margin-bottom:12px"><table><thead><tr><th>Commercial</th><th class="num">${per.yP} ${typeof perimetreConstant === 'function' && perimetreConstant(per.yP) ? 'à périmètre constant' : '(chiffres du mois)'}</th><th class="num">${per.yN}</th><th>Évolution</th><th>Détail client ${per.yP}</th></tr></thead><tbody>
         ${comsActifs.filter(c => !N1.com || c.id === N1.com).map(c => { const v = cov[c.id] || {}; const n = sum(per.N.map(m => { try{ return stats(c.id, m).ca; }catch(e){ return 0; } }));
           return `<tr><td>${esc(c.nom)}</td><td class="num">${eur(v.off)}</td><td class="num">${eur(n)}</td><td>${vTag(v.off > 0 ? (n - v.off) / v.off * 100 : null)}</td>
           <td>${v.hist ? '<span class="tag ok" title="Données › Historique compta">fichier global</span>' : v.taux === null ? '<span class="hint">—</span>' : v.manque ? `<span class="tag warn">manquant (${pct(v.taux)})</span>` : v.taux < 95 ? `<span class="tag info">partiel (${pct(v.taux)})</span>` : '<span class="tag ok">complet</span>'}</td></tr>`; }).join('')}
